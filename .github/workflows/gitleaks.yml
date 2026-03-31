@@ -3,10 +3,14 @@ name: Gitleaks
 on:
   workflow_call:
   pull_request:
+  push:
   workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
 
 jobs:
   gitleaks:
+    name: gitleaks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
