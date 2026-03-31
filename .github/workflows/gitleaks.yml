@@ -3,6 +3,7 @@ name: Gitleaks
 on:
   workflow_call:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   gitleaks:
