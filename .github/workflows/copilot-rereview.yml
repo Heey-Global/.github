@@ -1,0 +1,103 @@
+name: Copilot review re-request
+
+# Re-requests `copilot-pull-request-reviewer[bot]` on every PR push
+# (synchronize event). Without this, Copilot only reviews the initial
+# PR open; subsequent commits are not re-reviewed until you manually
+# click "re-request review" in the UI.
+#
+# Skips PRs authored by bots — Renovate/Dependabot/etc. are mechanical
+# dependency bumps where Copilot review is noise without value.
+#
+# Reusable: `uses: heey-global/.github/.github/workflows/copilot-rereview.yml@main`
+# from any project repo. Also runs directly on this repo's own PRs.
+
+on:
+  workflow_call:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: copilot-rereview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  rerequest:
+    # Skip bot-authored PRs (Renovate, Dependabot, etc.). Copilot review
+    # of mechanical dep bumps is noise — and Renovate PRs are merged
+    # routinely without human-level scrutiny anyway.
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-request Copilot reviewer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        # `shell: bash` is EXPLICIT here for a reason: GitHub-hosted
+        # Linux runners' UNSPECIFIED-shell default is `bash -e {0}`,
+        # which has `errexit` but NOT `pipefail`. Setting `shell: bash`
+        # promotes the invocation to `bash --noprofile --norc -eo
+        # pipefail {0}`, turning BOTH `set -e` AND `set -o pipefail`
+        # on. The `|| true` below is load-bearing under THAT shape
+        # (it absorbs the gh-api non-zero exit through the `tee` so
+        # set -e doesn't abort). Without the explicit `shell: bash`
+        # there would be no pipefail and `|| true` would be cosmetic
+        # — the script would still run but its fail-fast intent
+        # would silently degrade for any future `cmd | filter`
+        # additions. Keep `shell: bash` to lock the shape in.
+        shell: bash
+        run: |
+          # 422 is GitHub's generic validation-failed code on this
+          # endpoint. It covers "Copilot already requested" (fine,
+          # workflow is idempotent on synchronize events) AND
+          # "reviewer is not a valid user" AND other validation
+          # failures. We accept 422 ONLY when the response body
+          # mentions the specific "already requested" shape; the
+          # other 422 reasons (and all non-2xx non-422 statuses)
+          # fail the step so the maintainer notices.
+          #
+          # `gh api` exits non-zero on HTTP >= 400, INCLUDING the
+          # 422 we want to accept idempotently. The explicit
+          # `|| true` after the pipe lets the script continue past
+          # that non-zero exit so the case-statement below can
+          # inspect the body. Because `shell: bash` is set on this
+          # step (see the comment above the `run:` block), BOTH
+          # `errexit` AND `pipefail` are on, so without `|| true`
+          # pipefail would surface gh api's non-zero exit through
+          # the `tee` and `set -e` would abort the step before the
+          # case ran. The `|| true` is therefore load-bearing.
+          # `tee` is used so we still see the body to grep.
+          tmp=$(mktemp)
+          gh api -X POST \
+            "repos/${{ github.repository }}/pulls/$PR/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' \
+            --include 2>&1 | tee "$tmp" || true
+          # `gh api --include` emits one of: `HTTP/2 <code>`,
+          # `HTTP/2.0 <code>`, `HTTP/1.1 <code>`. Match all three
+          # by checking the `HTTP/` prefix.
+          status=$(awk 'tolower($1) ~ /^http\// {print $2; exit}' "$tmp")
+          case "$status" in
+            201|200)
+              echo "Copilot requested OK (HTTP $status)"
+              ;;
+            422)
+              # Only accept the literal idempotent-retry phrasing.
+              # `Review cannot be requested` was previously listed
+              # here but is too broad — it appears on other
+              # 422 paths too (unreachable reviewer state).
+              if grep -qiE 'reviewers are already requested|user is already requested|reviewer requested for this pull request' "$tmp"; then
+                echo "Copilot already requested (HTTP 422 idempotent) — skipping"
+              else
+                echo "::error::422 from requested_reviewers POST without the recognized 'already requested' shape — failing so the maintainer notices"
+                cat "$tmp" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::unexpected HTTP $status from requested_reviewers POST"
+              cat "$tmp" >&2
+              exit 1
+              ;;
+          esac
