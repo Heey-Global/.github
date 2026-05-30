@@ -46,6 +46,17 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Fetch shared Gitleaks config
+        # Org-wide ruleset lives at the repo root of Heey-Global/.github
+        # as `.gitleaks.toml`. Always pulled from `main` so security-rule
+        # additions reach every caller immediately, regardless of the
+        # workflow ref the caller pins (e.g. `@main`, `@v1`, `@<sha>`).
+        # `Heey-Global/.github` is public so no token is needed.
+        run: |
+          set -euo pipefail
+          curl -sSfL --retry 3 --retry-delay 2 \
+            -o /tmp/gitleaks.toml \
+            "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
       - name: Install Gitleaks
         run: |
           set -euo pipefail
@@ -58,4 +69,4 @@ jobs:
           echo "${EXPECTED_SHA256}  $tmpdir/$TARBALL" | sha256sum -c -
           tar -xzf "$tmpdir/$TARBALL" -C /tmp
       - name: Run Gitleaks
-        run: /tmp/gitleaks detect --source . --redact --exit-code 1
+        run: /tmp/gitleaks detect --source . --redact --exit-code 1 --config /tmp/gitleaks.toml

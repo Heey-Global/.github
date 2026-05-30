@@ -1,0 +1,34 @@
+# Heey-Global org-wide Gitleaks rule set.
+#
+# Consumed by the reusable workflow
+# `Heey-Global/.github/.github/workflows/gitleaks.yml`, which fetches
+# this file from `main` at job-start time. Every Heey-Global repo
+# that calls the workflow picks up rule changes here automatically,
+# regardless of the workflow ref (e.g. `@main`, `@v1`) it pins.
+#
+# Caller-side `.gitleaks.toml` files are intentionally NOT merged —
+# the central policy is authoritative. If a repo needs an allowlist
+# or a rule disabled, raise a PR against this file.
+
+[extend]
+# Inherit the gitleaks v8.x default rule set (~150 rules covering
+# AWS / GCP / Azure / GitHub tokens / Stripe / etc.) and layer the
+# org-specific rules below on top.
+useDefault = true
+
+[[rules]]
+id = "tailscale-key"
+description = "Tailscale key (auth / API / OAuth / reusable)"
+# Default gitleaks v8.30.1 rules ship with NO Tailscale coverage —
+# verified against the dev-server PR #96 incident where a
+# `tskey-auth-<id>CNTRL-<secret>` key sat in plaintext in the initial
+# commit and gitleaks gave it a clean bill of health.
+#
+# The regex catches the full `tskey-<subtype>-<payload>` shape,
+# subtype = any lowercase letters (auth / api / client / oauth /
+# reusable / future), payload = 30+ chars of [A-Za-z0-9-]. Floor of 30
+# is well below the real Tailscale-key payload size (the leaked
+# example was 50 chars) so placeholder docstrings like
+# `tskey-auth-<KEY_ID>...` won't trip.
+regex = '''tskey-[a-z]+-[A-Za-z0-9-]{30,}'''
+keywords = ["tskey-"]
