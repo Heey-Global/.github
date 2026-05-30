@@ -46,35 +46,56 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Fetch shared Gitleaks config
-        # Org-wide ruleset lives at the repo root of Heey-Global/.github
-        # as `.gitleaks.toml`. Always pulled from `main` so security-rule
-        # additions reach every caller immediately, regardless of the
-        # workflow ref the caller pins (e.g. `@main`, `@v1`, `@<sha>`).
-        # The known trade-off (a bad merge on main breaks all callers)
-        # is documented in `.gitleaks.toml`'s header.
+      - name: Resolve Gitleaks config
+        # Two paths, gated on `github.repository`:
         #
-        # `Heey-Global/.github` is public so no token is needed.
+        # 1. Running on Heey-Global/.github itself (the repo that
+        #    hosts this policy) — prefer the in-tree `.gitleaks.toml`
+        #    so a PR that updates the rule set can self-test before
+        #    merge. Without this branch, the very PR that adds /
+        #    bumps `.gitleaks.toml` would 404 against `main` and
+        #    fail its own gitleaks check, forcing a merge-blind
+        #    bootstrap. Internal-org PRs against `.github` go through
+        #    maintainer review, so a malicious in-tree rule-disable
+        #    is gated by that review — same trust boundary that
+        #    governs merges into `main`.
         #
-        # The SHA256 of the fetched file is logged so any tampered
-        # response from raw.githubusercontent.com — or a surprising
-        # config change — is visible in the job log. Compare with
+        # 2. Running anywhere else (every caller repo) — fetch the
+        #    canonical config from `main` of Heey-Global/.github.
+        #    Pinned to `main` (not the caller's workflow ref) so
+        #    security-rule additions reach every caller immediately,
+        #    regardless of the ref the caller pins (`@main`, `@v1`,
+        #    `@<sha>`). The known trade-off (a bad merge on main
+        #    breaks all callers) is documented in `.gitleaks.toml`'s
+        #    header. `Heey-Global/.github` is public so no token
+        #    is needed.
+        #
+        # Fork-PR safety in path 2: the `--config` file is fetched
+        # from `main`, NOT from the PR's checkout. A fork PR that
+        # edits `.gitleaks.toml` to disable rules cannot influence
+        # its own gitleaks run — the modified file in the PR
+        # checkout is never used. Path 1 (running on `.github`
+        # itself) does trust the PR's checkout but only for PRs
+        # against the policy repo itself, gated by maintainer review.
+        # A future refactor that swaps path 2 to a local-file config
+        # would re-open the fork-PR threat model; revisit if so.
+        #
+        # The SHA256 of the active config is logged so any tampered
+        # raw.githubusercontent.com response — or a surprising config
+        # change — is visible in the job log. Compare with
         # `git show main:.gitleaks.toml | sha256sum` to verify.
         # Audit trail only, not fail-closed.
-        #
-        # Fork-PR safety: this `--config` fetch is always from `main`,
-        # NOT from the PR's checkout. A PR that edits `.gitleaks.toml`
-        # to disable rules cannot influence its own gitleaks run via
-        # this step — the modified file in the PR checkout is never
-        # used. If a future refactor switches to a local-file config
-        # (e.g. `.gitleaks-config/` checked out alongside the source),
-        # this assumption breaks; revisit the fork-PR threat model.
         run: |
           set -euo pipefail
-          curl -sSfL --retry 3 --retry-delay 2 \
-            -o "$RUNNER_TEMP/gitleaks.toml" \
-            "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
-          echo "Fetched .gitleaks.toml SHA256: $(sha256sum "$RUNNER_TEMP/gitleaks.toml" | awk '{print $1}')"
+          if [ "${{ github.repository }}" = "Heey-Global/.github" ] && [ -f .gitleaks.toml ]; then
+            echo "Using in-tree .gitleaks.toml (running on Heey-Global/.github)"
+            cp .gitleaks.toml "$RUNNER_TEMP/gitleaks.toml"
+          else
+            curl -sSfL --retry 3 --retry-delay 2 \
+              -o "$RUNNER_TEMP/gitleaks.toml" \
+              "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
+          fi
+          echo "Active .gitleaks.toml SHA256: $(sha256sum "$RUNNER_TEMP/gitleaks.toml" | awk '{print $1}')"
       - name: Install Gitleaks
         run: |
           set -euo pipefail
