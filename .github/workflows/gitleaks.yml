@@ -94,13 +94,24 @@ jobs:
             fi
           fi
           if [ "$USE_IN_TREE" = "true" ]; then
-            echo "Using in-tree .gitleaks.toml (trusted same-repo source on Heey-Global/.github)"
+            echo "Using in-tree .gitleaks.toml (trusted source on Heey-Global/.github)"
             cp .gitleaks.toml "$RUNNER_TEMP/gitleaks.toml"
           else
-            curl -sSfL --retry 3 --retry-delay 2 \
+            # `--max-time` is the hung-handshake guard — without it a
+            # stuck TLS connection from raw.githubusercontent.com would
+            # park the self-hosted runner indefinitely.
+            curl -sSfL --retry 3 --retry-delay 2 --max-time 30 \
               -o "$RUNNER_TEMP/gitleaks.toml" \
               "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
           fi
+          # Fail loud on an empty/missing file rather than logging a
+          # silent empty SHA. A blank hash would still let gitleaks run
+          # against whatever (default-rules-only) config it inferred,
+          # masking the resolution failure.
+          [ -s "$RUNNER_TEMP/gitleaks.toml" ] || {
+            echo "ERROR: $RUNNER_TEMP/gitleaks.toml is missing or empty after resolve step"
+            exit 1
+          }
           sha=$(sha256sum "$RUNNER_TEMP/gitleaks.toml" | awk '{print $1}')
           echo "Active .gitleaks.toml SHA256: $sha"
       - name: Install Gitleaks
