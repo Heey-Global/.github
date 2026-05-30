@@ -25,7 +25,7 @@ useDefault = true
 
 [[rules]]
 id = "tailscale-key"
-description = "Tailscale key (auth / API / OAuth / reusable)"
+description = "Tailscale key (auth / api / oauth / reusable)"
 # Default gitleaks v8.30.1 rules ship with NO Tailscale coverage —
 # verified against the dev-server PR #96 incident where a
 # `tskey-auth-<id>CNTRL-<secret>` key sat in plaintext in the initial
@@ -35,9 +35,11 @@ description = "Tailscale key (auth / API / OAuth / reusable)"
 # subtype = 2–16 lowercase letters (covers auth / api / client /
 # oauth / reusable / future variants without going so wide that a
 # random 30-char identifier prefixed by an arbitrary lowercase blob
-# false-positives); payload = 30+ chars of [A-Za-z0-9-]. The 30-char
-# floor is well below the real Tailscale-key payload size (the leaked
-# example was 50 chars) so placeholder docstrings like
-# `tskey-auth-<KEY_ID>...` won't trip.
-regex = '''tskey-[a-z]{2,16}-[A-Za-z0-9-]{30,}'''
+# false-positives); payload = 30–200 chars of [A-Za-z0-9-]. The
+# 30-char floor is well below the real Tailscale-key payload size
+# (the leaked example was 50 chars) so placeholder docstrings like
+# `tskey-auth-<KEY_ID>...` won't trip; the 200-char ceiling stops
+# pathological inputs (e.g. minified JS lines with a `tskey-xx-`
+# substring followed by a long base64-ish blob) from over-matching.
+regex = '''tskey-[a-z]{2,16}-[A-Za-z0-9-]{30,200}'''
 keywords = ["tskey-"]
