@@ -11,7 +11,7 @@ on:
 jobs:
   gitleaks:
     name: gitleaks
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, dev-server, X64]
     steps:
       - uses: actions/checkout@v6
         with:
