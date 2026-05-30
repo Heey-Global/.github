@@ -29,7 +29,7 @@ jobs:
     # of mechanical dep bumps is noise — and Renovate PRs are merged
     # routinely without human-level scrutiny anyway.
     if: github.event.pull_request.user.type != 'Bot'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, dev-server, X64]
     steps:
       - name: Re-request Copilot reviewer
         env:
