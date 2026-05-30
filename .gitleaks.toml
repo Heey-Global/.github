@@ -9,6 +9,13 @@
 # Caller-side `.gitleaks.toml` files are intentionally NOT merged —
 # the central policy is authoritative. If a repo needs an allowlist
 # or a rule disabled, raise a PR against this file.
+#
+# Known trade-off: because the workflow always fetches this file from
+# `main` (not from the caller's pinned workflow ref), a bad commit
+# here breaks every caller's CI immediately. Accepted in exchange for
+# rule additions reaching every repo without any caller having to
+# bump their pinned ref. Mitigation: changes to this file go through
+# PR review on `Heey-Global/.github`; revert is a one-liner.
 
 [extend]
 # Inherit the gitleaks v8.x default rule set (~150 rules covering
@@ -24,11 +31,13 @@ description = "Tailscale key (auth / API / OAuth / reusable)"
 # `tskey-auth-<id>CNTRL-<secret>` key sat in plaintext in the initial
 # commit and gitleaks gave it a clean bill of health.
 #
-# The regex catches the full `tskey-<subtype>-<payload>` shape,
-# subtype = any lowercase letters (auth / api / client / oauth /
-# reusable / future), payload = 30+ chars of [A-Za-z0-9-]. Floor of 30
-# is well below the real Tailscale-key payload size (the leaked
+# The regex catches the full `tskey-<subtype>-<payload>` shape:
+# subtype = 2–16 lowercase letters (covers auth / api / client /
+# oauth / reusable / future variants without going so wide that a
+# random 30-char identifier prefixed by an arbitrary lowercase blob
+# false-positives); payload = 30+ chars of [A-Za-z0-9-]. The 30-char
+# floor is well below the real Tailscale-key payload size (the leaked
 # example was 50 chars) so placeholder docstrings like
 # `tskey-auth-<KEY_ID>...` won't trip.
-regex = '''tskey-[a-z]+-[A-Za-z0-9-]{30,}'''
+regex = '''tskey-[a-z]{2,16}-[A-Za-z0-9-]{30,}'''
 keywords = ["tskey-"]

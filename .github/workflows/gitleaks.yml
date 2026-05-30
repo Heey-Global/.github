@@ -51,12 +51,30 @@ jobs:
         # as `.gitleaks.toml`. Always pulled from `main` so security-rule
         # additions reach every caller immediately, regardless of the
         # workflow ref the caller pins (e.g. `@main`, `@v1`, `@<sha>`).
+        # The known trade-off (a bad merge on main breaks all callers)
+        # is documented in `.gitleaks.toml`'s header.
+        #
         # `Heey-Global/.github` is public so no token is needed.
+        #
+        # The SHA256 of the fetched file is logged so any tampered
+        # response from raw.githubusercontent.com — or a surprising
+        # config change — is visible in the job log. Compare with
+        # `git show main:.gitleaks.toml | sha256sum` to verify.
+        # Audit trail only, not fail-closed.
+        #
+        # Fork-PR safety: this `--config` fetch is always from `main`,
+        # NOT from the PR's checkout. A PR that edits `.gitleaks.toml`
+        # to disable rules cannot influence its own gitleaks run via
+        # this step — the modified file in the PR checkout is never
+        # used. If a future refactor switches to a local-file config
+        # (e.g. `.gitleaks-config/` checked out alongside the source),
+        # this assumption breaks; revisit the fork-PR threat model.
         run: |
           set -euo pipefail
           curl -sSfL --retry 3 --retry-delay 2 \
-            -o /tmp/gitleaks.toml \
+            -o "$RUNNER_TEMP/gitleaks.toml" \
             "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
+          echo "Fetched .gitleaks.toml SHA256: $(sha256sum "$RUNNER_TEMP/gitleaks.toml" | awk '{print $1}')"
       - name: Install Gitleaks
         run: |
           set -euo pipefail
@@ -69,4 +87,4 @@ jobs:
           echo "${EXPECTED_SHA256}  $tmpdir/$TARBALL" | sha256sum -c -
           tar -xzf "$tmpdir/$TARBALL" -C /tmp
       - name: Run Gitleaks
-        run: /tmp/gitleaks detect --source . --redact --exit-code 1 --config /tmp/gitleaks.toml
+        run: /tmp/gitleaks detect --source . --redact --exit-code 1 --config "$RUNNER_TEMP/gitleaks.toml"
