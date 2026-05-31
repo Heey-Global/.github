@@ -36,7 +36,8 @@ jobs:
     # private callers (every Heey-Global product repo) get the
     # self-hosted pool. `github.event` is inherited from the caller's
     # event under `workflow_call`, so `event.repository.private`
-    # transparently reflects the caller's visibility.
+    # reflects the caller's visibility for the `pull_request`-event
+    # invocations every current caller uses.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-server", "X64"]') || 'ubuntu-latest' }}
     steps:
       - name: Re-request Copilot reviewer

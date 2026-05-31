@@ -25,8 +25,10 @@ jobs:
     #
     # When invoked via `workflow_call`, `github.event` is inherited
     # from the caller's triggering event, so `event.repository.private`
-    # transparently reflects the caller's visibility. No need to
-    # hardcode repo names.
+    # reflects the caller's visibility on event-payload-bearing
+    # triggers (`pull_request`, `push`) — which is the only invocation
+    # pattern current callers use. See the schedule/dispatch caveat
+    # below for the minimal-payload case. No repo names to hardcode.
     #
     # Edge case: on events with a minimal payload (`schedule`,
     # `workflow_dispatch`) `github.event.repository` is undefined,
