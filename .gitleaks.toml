@@ -1,0 +1,47 @@
+# Heey-Global org-wide Gitleaks rule set.
+#
+# Consumed by the reusable workflow
+# `Heey-Global/.github/.github/workflows/gitleaks.yml`, which fetches
+# this file from `main` at job-start time. Every Heey-Global repo
+# that calls the workflow picks up rule changes here automatically,
+# regardless of the workflow ref (e.g. `@main`, `@v1`) it pins.
+#
+# Caller-side `.gitleaks.toml` files are intentionally NOT merged —
+# the central policy is authoritative. If a repo needs an allowlist
+# or a rule disabled, raise a PR against this file.
+#
+# Known trade-off: because the workflow always fetches this file from
+# `main` (not from the caller's pinned workflow ref), a bad commit
+# here breaks every caller's CI immediately. Accepted in exchange for
+# rule additions reaching every repo without any caller having to
+# bump their pinned ref. Mitigation: changes to this file go through
+# PR review on `Heey-Global/.github`; revert is a one-liner.
+
+[extend]
+# Inherit the gitleaks v8.x default rule set (~150 rules covering
+# AWS / GCP / Azure / GitHub tokens / Stripe / etc.) and layer the
+# org-specific rules below on top.
+useDefault = true
+
+[[rules]]
+id = "tailscale-key"
+description = "Tailscale key (auth / api / oauth / reusable)"
+# Default gitleaks v8.30.1 rules ship with NO Tailscale coverage —
+# verified against the dev-server PR #96 incident where a real
+# `tskey-auth-…CNTRL-…` key sat in plaintext in the initial commit
+# and gitleaks gave it a clean bill of health.
+#
+# The regex catches the full `tskey-<subtype>-<payload>` shape:
+# subtype = 2–16 lowercase letters (covers auth / api / client /
+# oauth / reusable / future variants without going so wide that a
+# random 30-char identifier prefixed by an arbitrary lowercase blob
+# false-positives); payload = 30–200 chars of [A-Za-z0-9-]. The
+# 30-char floor is well above the docstring-placeholder shape
+# `tskey-auth-<KEY_ID>...` (the angle brackets aren't in the char
+# class) so docs don't trip the rule. The 200-char ceiling bounds
+# regex backtracking cost on pathological inputs (e.g. minified
+# JS lines containing a `tskey-xx-` substring followed by a long
+# base64-ish blob) — the rule will still fire on such inputs, just
+# at predictable cost.
+regex = '''tskey-[a-z]{2,16}-[A-Za-z0-9-]{30,200}'''
+keywords = ["tskey-"]
