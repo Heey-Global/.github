@@ -1,0 +1,72 @@
+name: Lockfile Lint
+
+# Reusable workflow for npm `package-lock.json` tampering detection.
+#
+# Called from project repos via:
+#
+#   jobs:
+#     lockfile-lint:
+#       uses: heey-global/.github/.github/workflows/lockfile-lint.yml@main
+#
+# Catches the class of attack where a PR appears to bump a dep but
+# secretly flips a `resolved:` URL or `integrity:` hash to point at a
+# malicious mirror. `lockfile-lint` is deterministic where eyeball-
+# reviewing a `package-lock.json` diff is not. Belt-and-suspenders
+# with the `allow-git=none` npmrc default baked into the dev-base
+# image (heey-global/dev-server PR #103).
+#
+# Caller wiring (one PR per Node-stack project repo) is out of scope
+# of this file's introduction PR — handled per-repo by the operator.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile-lint:
+    name: lockfile-lint
+    # Repo-name gate — same shape as `gitleaks.yml` and
+    # `copilot-rereview.yml` in this repo. See the longer comment in
+    # `gitleaks.yml` for the visibility-vs-repo-name trade-off. Strictly
+    # speaking this workflow is `workflow_call`-only and would never run
+    # directly on `.github` itself, so the `ubuntu-latest` branch is
+    # defensive future-proofing (in case someone later adds a self-test
+    # trigger on this repo); the meaningful path is the fallback to the
+    # self-hosted array under caller-repo invocation.
+    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install lockfile-lint
+        # Keep the `# renovate:` annotation on the line IMMEDIATELY
+        # preceding `npm install` — the `customManagers` regex in
+        # `renovate.json` requires that adjacency to capture the
+        # version. The `set -euo pipefail` line above the annotation
+        # is fine; what would break is anything inserted between the
+        # annotation and the `npm install` line.
+        run: |
+          set -euo pipefail
+          # renovate: datasource=npm depName=lockfile-lint
+          npm install -g lockfile-lint@5.0.0
+      - name: Lint package-lock.json
+        run: |
+          set -euo pipefail
+          # Guard against the silent-pass failure mode: lockfile-lint
+          # globs `--path package-lock.json` and a missing file just
+          # results in zero validators running + exit 0. A caller repo
+          # without a top-level lockfile (or with one nested under
+          # `apps/*/package-lock.json`) would otherwise get a green
+          # check that proves nothing. Fail loud instead.
+          if [ ! -f package-lock.json ]; then
+            echo "::error::package-lock.json not found at repo root — lockfile-lint expects the lockfile at the top level. If this repo keeps lockfiles in subdirectories, the caller needs a workflow that loops over each path instead of reusing this one as-is."
+            exit 1
+          fi
+          lockfile-lint \
+            --path package-lock.json \
+            --type npm \
+            --allowed-hosts npm \
+            --validate-https \
+            --validate-integrity \
+            --validate-package-names \
+            --empty-hostname false
