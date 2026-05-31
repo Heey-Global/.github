@@ -7,8 +7,26 @@
 # regardless of the workflow ref (e.g. `@main`, `@v1`) it pins.
 #
 # Caller-side `.gitleaks.toml` files are intentionally NOT merged —
-# the central policy is authoritative. If a repo needs an allowlist
-# or a rule disabled, raise a PR against this file.
+# the central policy is authoritative for RULE definitions. If a repo
+# needs a new rule, an existing rule modified, or a rule disabled,
+# raise a PR against this file.
+#
+# Per-repo fingerprint allowlists (suppressing specific historical
+# findings the repo has decided are remediated) are a separate
+# mechanism: gitleaks auto-discovers a `.gitleaksignore` file at the
+# caller-repo root via its default `--gitleaks-ignore-path .` flag.
+# Caller repos manage that file themselves, no PR here required —
+# the file format is one fingerprint per line as
+# `<commit-sha>:<repo-relative-file-path>:<rule-id>:<line>`, with
+# `#`-comments encouraged to document why each fingerprint is allowed.
+#
+# Heuristic for which tool to reach for: is the leak still live? Fix
+# the leak first (rotate the secret, etc.) — don't allowlist a live
+# leak. Is the leak remediated but the string remains in immutable
+# history (e.g. a long-merged commit, expired credential)? Add the
+# fingerprint to the caller's `.gitleaksignore` with a comment.
+# Is the regex itself producing a false positive across the org?
+# That's a PR against THIS file.
 #
 # Known trade-off: because the workflow always fetches this file from
 # `main` (not from the caller's pinned workflow ref), a bad commit
