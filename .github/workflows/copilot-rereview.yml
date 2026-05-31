@@ -29,7 +29,15 @@ jobs:
     # of mechanical dep bumps is noise — and Renovate PRs are merged
     # routinely without human-level scrutiny anyway.
     if: github.event.pull_request.user.type != 'Bot'
-    runs-on: [self-hosted, dev-server, X64]
+    # Same public-repo-blocks-self-hosted-runner reasoning as the
+    # gitleaks reusable workflow next door — see the longer comment
+    # there. Short version: `.github` is public and can't reach the
+    # self-hosted pool by default, so when this workflow fires on
+    # `.github`'s own PRs via `on: pull_request: synchronize`, the
+    # job must run on ubuntu-latest. Caller-repo invocations through
+    # `workflow_call` keep using the self-hosted pool because
+    # `github.repository` is the caller's (private) slug there.
+    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - name: Re-request Copilot reviewer
         env:

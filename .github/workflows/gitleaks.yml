@@ -11,7 +11,23 @@ on:
 jobs:
   gitleaks:
     name: gitleaks
-    runs-on: [self-hosted, dev-server, X64]
+    # `Heey-Global/.github` is a public repo and GitHub blocks public
+    # repos from using self-hosted runners by default (without flipping
+    # the org-wide "Allow public repos" setting, which Heey-Global has
+    # intentionally NOT done). So when this workflow runs via its own
+    # `on: push|pull_request|schedule|workflow_dispatch` triggers on
+    # `.github` itself, it has to use a GitHub-hosted runner — otherwise
+    # the run sits queued forever.
+    #
+    # When called via `workflow_call` from a private caller repo,
+    # `github.repository` is the caller's slug (private), so the
+    # ternary falls through to the self-hosted-runner array — that's
+    # the org default and what the migration off ubuntu-latest was for.
+    #
+    # `fromJSON` is required because GHA's `&&/||` ternary only
+    # produces a single value, so the array form of `runs-on` has to
+    # be parsed back from a JSON string.
+    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
