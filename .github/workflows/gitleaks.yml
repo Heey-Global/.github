@@ -11,32 +11,37 @@ on:
 jobs:
   gitleaks:
     name: gitleaks
-    # `Heey-Global/.github` is a public repo and GitHub blocks public
-    # repos from using self-hosted runners by default (without flipping
-    # the org-wide "Allow public repos" setting, which Heey-Global has
-    # intentionally NOT done). So when this workflow runs via its own
-    # `on: push|pull_request|schedule|workflow_dispatch` triggers on
-    # `.github` itself, it has to use a GitHub-hosted runner — otherwise
-    # the run sits queued forever.
+    # Route the job based on the *visibility* of the repo the workflow
+    # is running on, not the repo name. GitHub blocks public repos from
+    # using self-hosted runners by default, and Heey-Global has
+    # intentionally NOT flipped the org-wide "Allow public repos"
+    # setting. So:
     #
-    # When called via `workflow_call` from a private caller repo,
-    # `github.repository` is the caller's slug (private), so the
-    # ternary falls through to the self-hosted-runner array — that's
-    # the org default and what the migration off ubuntu-latest was for.
+    #   - `github.event.repository.private == true` → caller is a
+    #     private repo (every Heey-Global product repo) → self-hosted.
+    #   - `github.event.repository.private == false` → caller is a
+    #     public repo (`.github` itself, plus any future public org
+    #     repo) → ubuntu-latest, otherwise the run queues forever.
     #
-    # `fromJSON` is required because `runs-on` accepts either a
-    # string or a sequence, the GHA `&&/||` ternary produces exactly
-    # one of those, and the self-hosted branch needs a sequence —
-    # `fromJSON` materializes the sequence from a JSON-encoded
-    # literal so both branches of the ternary are well-typed.
+    # When invoked via `workflow_call`, `github.event` is inherited
+    # from the caller's triggering event, so `event.repository.private`
+    # transparently reflects the caller's visibility. No need to
+    # hardcode repo names.
     #
-    # The string comparison is CASE-SENSITIVE — `github.repository`
-    # returns the canonical casing (`Heey-Global/.github`). The
-    # lowercase form `heey-global/.github` that's valid in `uses:`
-    # references (GitHub repo URLs are case-insensitive) would NOT
-    # match this expression and would silently fall through to the
-    # self-hosted branch on `.github` itself. Keep the casing exact.
-    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
+    # Edge case: on events with a minimal payload (`schedule`,
+    # `workflow_dispatch`) `github.event.repository` is undefined,
+    # so the property read is null → falsy → falls through to
+    # `ubuntu-latest`. That's the right default for the `.github`-on-
+    # schedule path (this file's `0 4 * * *` cron). If a future
+    # private-repo caller chains this workflow off its OWN schedule
+    # / dispatch trigger and needs self-hosted, the reusable would
+    # need to take a `runner` input — not building that now since
+    # no current caller uses that pattern.
+    #
+    # `fromJSON` is the sequence-typed branch's escape hatch because
+    # `runs-on` accepts either a string or a sequence and the GHA
+    # ternary returns a single value.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-server", "X64"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
         with:

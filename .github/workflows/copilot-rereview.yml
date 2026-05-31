@@ -29,18 +29,15 @@ jobs:
     # of mechanical dep bumps is noise — and Renovate PRs are merged
     # routinely without human-level scrutiny anyway.
     if: github.event.pull_request.user.type != 'Bot'
-    # Same public-repo-blocks-self-hosted-runner reasoning as the
-    # gitleaks reusable workflow next door — see the longer comment
-    # there. Short version: `.github` is public and can't reach the
-    # self-hosted pool by default, so when this workflow fires on
-    # `.github`'s own PRs via `on: pull_request: synchronize`, the
-    # job must run on ubuntu-latest. Caller-repo invocations through
-    # `workflow_call` keep using the self-hosted pool because
-    # `github.repository` is the caller's (private) slug there.
-    # The string comparison is CASE-SENSITIVE; `github.repository`
-    # returns canonical casing (`Heey-Global/.github`), not the
-    # lowercase form valid in `uses:` references.
-    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
+    # Route by repo visibility — see the longer comment in the
+    # gitleaks reusable workflow next door. Short version: GitHub
+    # blocks public repos from using self-hosted runners by default,
+    # so a public-caller invocation has to fall back to ubuntu-latest;
+    # private callers (every Heey-Global product repo) get the
+    # self-hosted pool. `github.event` is inherited from the caller's
+    # event under `workflow_call`, so `event.repository.private`
+    # transparently reflects the caller's visibility.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-server", "X64"]') || 'ubuntu-latest' }}
     steps:
       - name: Re-request Copilot reviewer
         env:
