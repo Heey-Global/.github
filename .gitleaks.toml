@@ -11,22 +11,36 @@
 # needs a new rule, an existing rule modified, or a rule disabled,
 # raise a PR against this file.
 #
-# Per-repo fingerprint allowlists (suppressing specific historical
-# findings the repo has decided are remediated) are a separate
-# mechanism: gitleaks auto-discovers a `.gitleaksignore` file at the
-# caller-repo root via its default `--gitleaks-ignore-path .` flag.
-# Caller repos manage that file themselves, no PR here required —
-# the file format is one fingerprint per line as
-# `<commit-sha>:<repo-relative-file-path>:<rule-id>:<line>`, with
-# `#`-comments encouraged to document why each fingerprint is allowed.
+# Per-repo fingerprint allowlists (suppressing specific findings the
+# repo has decided don't need to be flagged — remediated historical
+# leaks, legitimate-looking test fixtures, single-repo false positives
+# the regex correctly flags but where context makes it safe) are a
+# separate mechanism: gitleaks auto-discovers a `.gitleaksignore` file
+# at the caller-repo root (the `--gitleaks-ignore-path` flag defaults
+# to `.`, so the workflow's `gitleaks detect --source .` picks it up
+# without any extra flag). Caller repos manage that file themselves,
+# no PR here required. The file format is one fingerprint per line:
 #
-# Heuristic for which tool to reach for: is the leak still live? Fix
-# the leak first (rotate the secret, etc.) — don't allowlist a live
-# leak. Is the leak remediated but the string remains in immutable
-# history (e.g. a long-merged commit, expired credential)? Add the
-# fingerprint to the caller's `.gitleaksignore` with a comment.
-# Is the regex itself producing a false positive across the org?
-# That's a PR against THIS file.
+#   - Git-mode scans (the workflow's default — what callers ship):
+#     `<commit-sha>:<repo-relative-file-path>:<rule-id>:<line>`
+#   - No-git scans (only relevant if a caller runs `detect --no-git`
+#     locally to scan the working tree only): `<file>:<rule-id>:<line>`
+#
+# `#`-comments are encouraged to document why each fingerprint is
+# allowed — Copilot review and future maintainers will ask otherwise.
+#
+# Heuristic for which tool to reach for:
+#   - Leak is still live → fix the leak first (rotate the secret,
+#     etc.). Never allowlist a live leak.
+#   - Leak is remediated but the string remains in immutable history
+#     (long-merged commit, expired credential) → caller's
+#     `.gitleaksignore`.
+#   - Current-tree string that the regex correctly matches but isn't
+#     actually a secret (test fixture, sample config, anonymized
+#     docs example) → caller's `.gitleaksignore`.
+#   - Regex itself produces a false positive across the org → PR
+#     against THIS file (rule tightening, allowlist clause, or
+#     `[allowlist]` entry under the rule).
 #
 # Known trade-off: because the workflow always fetches this file from
 # `main` (not from the caller's pinned workflow ref), a bad commit
