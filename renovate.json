@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Extract pinned npm package versions from `npm install -g pkg@version` lines inside reusable workflows. Renovate's stock github-actions manager only catches `uses:` action pins; inline package installs need this customManager to be visible. Annotation must sit directly above the install line — see `lockfile-lint.yml` for the canonical shape.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*npm\\s+install(?:\\s+-g)?\\s+\\S+@(?<currentValue>[^\\s'\"]+)"
+      ]
+    }
   ]
 }
