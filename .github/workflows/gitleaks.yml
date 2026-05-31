@@ -11,7 +11,37 @@ on:
 jobs:
   gitleaks:
     name: gitleaks
-    runs-on: [self-hosted, dev-server, X64]
+    # Route the job based on which repo the workflow is running on.
+    # GitHub blocks public repos from using self-hosted runners by
+    # default, and Heey-Global has intentionally NOT flipped the
+    # org-wide "Allow public repos" setting. So when this workflow
+    # runs via its own `on: push|pull_request|schedule|...` triggers
+    # on the public `.github` repo, it must use ubuntu-latest;
+    # otherwise the run sits queued forever.
+    #
+    # When invoked via `workflow_call` from a private caller repo,
+    # `github.repository` is the caller's (private) slug, so the
+    # ternary falls through to the self-hosted-runner array.
+    #
+    # The string comparison is CASE-SENSITIVE — `github.repository`
+    # returns canonical casing (`Heey-Global/.github`). The lowercase
+    # form valid in `uses:` references would NOT match.
+    #
+    # Why not `github.event.repository.private` (visibility-based,
+    # which would be generic for any future public org repo): we
+    # tried it and discovered that field evaluates inconsistently
+    # across event types — for `.github` PRs on this very branch the
+    # `push` event resolved to ubuntu-latest correctly but the
+    # `pull_request` event for the same commit resolved to the
+    # self-hosted array and queued forever. Until that quirk is
+    # tracked down (likely a GHA event-payload inconsistency for
+    # `event.repository.private` on `pull_request`), the repo-name
+    # gate is the reliable form.
+    #
+    # `fromJSON` is the sequence-typed branch's escape hatch because
+    # `runs-on` accepts either a string or a sequence and the GHA
+    # ternary returns a single value.
+    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
