@@ -24,9 +24,18 @@ jobs:
     # ternary falls through to the self-hosted-runner array — that's
     # the org default and what the migration off ubuntu-latest was for.
     #
-    # `fromJSON` is required because GHA's `&&/||` ternary only
-    # produces a single value, so the array form of `runs-on` has to
-    # be parsed back from a JSON string.
+    # `fromJSON` is required because `runs-on` accepts either a
+    # string or a sequence, the GHA `&&/||` ternary produces exactly
+    # one of those, and the self-hosted branch needs a sequence —
+    # `fromJSON` materializes the sequence from a JSON-encoded
+    # literal so both branches of the ternary are well-typed.
+    #
+    # The string comparison is CASE-SENSITIVE — `github.repository`
+    # returns the canonical casing (`Heey-Global/.github`). The
+    # lowercase form `heey-global/.github` that's valid in `uses:`
+    # references (GitHub repo URLs are case-insensitive) would NOT
+    # match this expression and would silently fall through to the
+    # self-hosted branch on `.github` itself. Keep the casing exact.
     runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - uses: actions/checkout@v6

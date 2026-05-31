@@ -37,6 +37,9 @@ jobs:
     # job must run on ubuntu-latest. Caller-repo invocations through
     # `workflow_call` keep using the self-hosted pool because
     # `github.repository` is the caller's (private) slug there.
+    # The string comparison is CASE-SENSITIVE; `github.repository`
+    # returns canonical casing (`Heey-Global/.github`), not the
+    # lowercase form valid in `uses:` references.
     runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - name: Re-request Copilot reviewer
