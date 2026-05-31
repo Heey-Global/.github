@@ -29,16 +29,15 @@ jobs:
     # of mechanical dep bumps is noise — and Renovate PRs are merged
     # routinely without human-level scrutiny anyway.
     if: github.event.pull_request.user.type != 'Bot'
-    # Route by repo visibility — see the longer comment in the
-    # gitleaks reusable workflow next door. Short version: GitHub
-    # blocks public repos from using self-hosted runners by default,
-    # so a public-caller invocation has to fall back to ubuntu-latest;
-    # private callers (every Heey-Global product repo) get the
-    # self-hosted pool. `github.event` is inherited from the caller's
-    # event under `workflow_call`, so `event.repository.private`
-    # reflects the caller's visibility for the `pull_request`-event
-    # invocations every current caller uses.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-server", "X64"]') || 'ubuntu-latest' }}
+    # Route by repo name — see the longer comment in the gitleaks
+    # reusable workflow next door for why we're NOT using the
+    # visibility-based form (`github.event.repository.private`)
+    # that would otherwise be the cleaner choice. Short version:
+    # that field evaluates inconsistently across event types in
+    # GHA, so the repo-name gate is the reliable form for now.
+    # The comparison is CASE-SENSITIVE — keep `Heey-Global/.github`
+    # in canonical casing.
+    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - name: Re-request Copilot reviewer
         env:
