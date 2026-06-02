@@ -38,6 +38,22 @@ jobs:
     runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - uses: actions/checkout@v6
+      - name: Set up Node.js
+        # Self-hosted `dev-server` runners (the meaningful caller path)
+        # don't have `node`/`npm` on `$PATH` by default — only the
+        # GitHub-hosted `ubuntu-latest` image ships them pre-installed.
+        # Without this step, the next `npm install -g` step fails on
+        # the self-hosted leg with `npm: command not found`. setup-node
+        # is a no-op on ubuntu-latest (node is already there), so the
+        # `.github`-itself defensive branch is unaffected.
+        uses: actions/setup-node@v6
+        with:
+          # LTS major; setup-node resolves to the latest 22.x. Floating
+          # within the LTS line is acceptable because the install step
+          # below uses node only to run `lockfile-lint` (no runtime
+          # version-sensitivity); pinning to a patch would generate
+          # noisy Renovate PRs without behavior change.
+          node-version: '22'
       - name: Install lockfile-lint
         # Keep the `# renovate:` annotation on the line IMMEDIATELY
         # preceding `npm install` — the `customManagers` regex in
