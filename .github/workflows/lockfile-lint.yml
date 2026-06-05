@@ -53,7 +53,7 @@ jobs:
           # below uses node only to run `lockfile-lint` (no runtime
           # version-sensitivity); pinning to a patch would generate
           # noisy Renovate PRs without behavior change.
-          node-version: '22'
+          node-version: '24'
       - name: Install lockfile-lint
         # Keep the `# renovate:` annotation on the line IMMEDIATELY
         # preceding `npm install` — the `customManagers` regex in
