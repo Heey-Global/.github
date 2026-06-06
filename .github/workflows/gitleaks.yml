@@ -41,7 +41,17 @@ jobs:
     # `fromJSON` is the sequence-typed branch's escape hatch because
     # `runs-on` accepts either a string or a sequence and the GHA
     # ternary returns a single value.
-    runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
+    #
+    # TEST 2026-06-05: trying the visibility-string field instead
+    # of the boolean private. Earlier comment block above recorded
+    # `event.repository.private` (boolean) as flaky on pull_request
+    # events. Hypothesis: `event.repository.visibility` (string,
+    # values 'public'/'private'/'internal') may be more stable.
+    # If both push AND pull_request runs on this branch resolve to
+    # ubuntu-latest (this repo is public), the gate generalizes to
+    # all public Heey-Global repos (e.g. deep-ocr-n8n) without
+    # needing a per-repo allowlist.
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
