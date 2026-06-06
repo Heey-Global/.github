@@ -11,46 +11,29 @@ on:
 jobs:
   gitleaks:
     name: gitleaks
-    # Route the job based on which repo the workflow is running on.
-    # GitHub blocks public repos from using self-hosted runners by
-    # default, and Heey-Global has intentionally NOT flipped the
-    # org-wide "Allow public repos" setting. So when this workflow
-    # runs via its own `on: push|pull_request|schedule|...` triggers
-    # on the public `.github` repo, it must use ubuntu-latest;
-    # otherwise the run sits queued forever.
+    # Route the job to the right runner based on caller-repo
+    # visibility. GitHub blocks public repos from using self-hosted
+    # runners by default, and Heey-Global has intentionally NOT
+    # flipped the org-wide "Allow public repos" setting. So any
+    # public caller (`.github` itself, `deep-ocr-n8n`, …) MUST use
+    # ubuntu-latest; otherwise the run sits queued forever.
+    # Private callers (`aip-kitchen`, `heey-website`, …) get
+    # self-hosted runners for cost + speed.
     #
-    # When invoked via `workflow_call` from a private caller repo,
-    # `github.repository` is the caller's (private) slug, so the
-    # ternary falls through to the self-hosted-runner array.
-    #
-    # The string comparison is CASE-SENSITIVE — `github.repository`
-    # returns canonical casing (`Heey-Global/.github`). The lowercase
-    # form valid in `uses:` references would NOT match.
-    #
-    # Why not `github.event.repository.private` (visibility-based,
-    # which would be generic for any future public org repo): we
-    # tried it and discovered that field evaluates inconsistently
-    # across event types — for `.github` PRs on this very branch the
-    # `push` event resolved to ubuntu-latest correctly but the
-    # `pull_request` event for the same commit resolved to the
-    # self-hosted array and queued forever. Until that quirk is
-    # tracked down (likely a GHA event-payload inconsistency for
-    # `event.repository.private` on `pull_request`), the repo-name
-    # gate is the reliable form.
+    # We use `event.repository.visibility` (string, values
+    # `'public' | 'private' | 'internal'`) rather than
+    # `event.repository.private` (boolean). The boolean form was
+    # tried earlier and resolved inconsistently across event types —
+    # `push` evaluated correctly but `pull_request` on the same
+    # commit returned a falsy/empty value, routing PRs to the
+    # self-hosted array and queueing them forever. The string field
+    # is empirically stable across both event types (verified on
+    # this very PR's `push` + `pull_request` runs 2026-06-05; both
+    # routed to ubuntu-latest as expected).
     #
     # `fromJSON` is the sequence-typed branch's escape hatch because
     # `runs-on` accepts either a string or a sequence and the GHA
     # ternary returns a single value.
-    #
-    # TEST 2026-06-05: trying the visibility-string field instead
-    # of the boolean private. Earlier comment block above recorded
-    # `event.repository.private` (boolean) as flaky on pull_request
-    # events. Hypothesis: `event.repository.visibility` (string,
-    # values 'public'/'private'/'internal') may be more stable.
-    # If both push AND pull_request runs on this branch resolve to
-    # ubuntu-latest (this repo is public), the gate generalizes to
-    # all public Heey-Global repos (e.g. deep-ocr-n8n) without
-    # needing a per-repo allowlist.
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
       - uses: actions/checkout@v6
