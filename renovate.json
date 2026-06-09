@@ -3,6 +3,10 @@
   "extends": [
     "config:recommended"
   ],
+  "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days"
+  },
   "customManagers": [
     {
       "customType": "regex",
