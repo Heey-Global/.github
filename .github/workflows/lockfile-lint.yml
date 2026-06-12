@@ -57,7 +57,7 @@ jobs:
       - name: Install lockfile-lint
         # Keep the `# renovate:` annotation on the line IMMEDIATELY
         # preceding `npm install` — the `customManagers` regex in
-        # `renovate.json` requires that adjacency to capture the
+        # `default.json` requires that adjacency to capture the
         # version. The `set -euo pipefail` line above the annotation
         # is fine; what would break is anything inserted between the
         # annotation and the `npm install` line.

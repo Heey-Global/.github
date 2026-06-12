@@ -61,7 +61,7 @@ name: Digest Age Check
 # is FAIL-CLOSED unless allowlisted. Org-built images (self-published,
 # already trusted) are allowlisted by default so their bumps aren't
 # blocked — mirroring the `minimumReleaseAge: null` carve-out those
-# same images get in renovate.json.
+# same images get in default.json.
 #
 # SSRF: registry/realm hosts come from the attacker-controlled image
 # ref, so both are resolved + range-checked against private/metadata
@@ -122,7 +122,7 @@ jobs:
           # Default allowlist (org-built, already-trusted registries) when
           # no DIGEST_ALLOWLIST variable is set. Mirrors the
           # `minimumReleaseAge: null` carve-out these same images get in
-          # renovate.json. Setting the variable REPLACES this list — re-add
+          # default.json. Setting the variable REPLACES this list — re-add
           # the org registries if you override it.
           if [ -z "${ALLOWLIST//[[:space:]]/}" ]; then
             ALLOWLIST=$(printf '%s\n' 'ghcr.io/heey-global/*' 'ghcr.io/h-teske/*')
