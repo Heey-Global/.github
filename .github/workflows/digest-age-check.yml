@@ -107,6 +107,14 @@ jobs:
               echo "::error::required tool '$tool' not found on runner"; exit 1; }
           done
 
+          # Integer-validate the threshold up front: it feeds `$(( ... ))`
+          # below, and a fractional/non-numeric value (e.g. a caller
+          # passing 0.5) would abort the step with a cryptic arithmetic
+          # error instead of a clear verdict.
+          case "$MIN_AGE_DAYS" in
+            ''|*[!0-9]*) echo "::error::minimum-age-days must be a non-negative integer (got '$MIN_AGE_DAYS')"; exit 1 ;;
+          esac
+
           NOW=$(date -u +%s)
           MIN_AGE_SECS=$(( MIN_AGE_DAYS * 86400 ))
           FAILED=0
@@ -172,15 +180,40 @@ jobs:
           }
 
           # --- Docker digest -> config `.created` --------------------
+          # SSRF guard: a malicious PR can point an image at an
+          # attacker-controlled registry whose `www-authenticate` realm
+          # we'd otherwise fetch verbatim. Only follow an https realm on
+          # a public host — reject link-local / loopback / private / cloud
+          # metadata targets so the runner can't be turned into an SSRF
+          # proxy. (The registry curls carry no GITHUB_TOKEN, so the blast
+          # radius is limited, but a blind outbound to a chosen URL is
+          # still worth refusing.)
+          realm_is_safe() {
+            local realm="$1" host
+            case "$realm" in https://*) : ;; *) return 1 ;; esac
+            host=$(printf '%s' "$realm" | sed -E 's#^https://([^/:]+).*#\1#')
+            case "$host" in
+              localhost|127.*|0.*|10.*|192.168.*|169.254.*|metadata|metadata.*|*.internal|*.local|[0-9]*:*|\[*) return 1 ;;
+              172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 1 ;;
+            esac
+            return 0
+          }
+
           registry_token() {  # registry  repo  -> bearer (may be empty)
             local reg="$1" repo="$2" www realm service token
-            www=$(curl -sS -o /dev/null -D - "https://$reg/v2/" 2>/dev/null \
+            www=$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
+                  -o /dev/null -D - "https://$reg/v2/" 2>/dev/null \
                   | tr -d '\r' | grep -i '^www-authenticate:' | head -1 || true)
             [ -z "$www" ] && return 0   # registry needs no auth
             realm=$(printf '%s' "$www"   | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
             service=$(printf '%s' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
             [ -z "$realm" ] && return 0
-            token=$(curl -sS "${realm}?service=${service}&scope=repository:${repo}:pull" 2>/dev/null \
+            realm_is_safe "$realm" || {
+              echo "::warning::refusing token realm '$realm' for $reg (non-https or private/metadata host)" >&2
+              return 0
+            }
+            token=$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
+                    "${realm}?service=${service}&scope=repository:${repo}:pull" 2>/dev/null \
                     | jq -r '.token // .access_token // empty' 2>/dev/null || true)
             printf '%s' "$token"
           }
@@ -218,48 +251,66 @@ jobs:
             # drops the Authorization header on cross-host redirects,
             # which is correct (the redirect target issues its own
             # anon/presigned access).
-            manifest=$(curl -sSL "${auth[@]}" -H "Accept: $accept" \
+            # --retry/--max-time match the gitleaks.yml precedent: a
+            # transient registry 5xx must not silently become an empty
+            # date, and a hung TLS handshake must not park the
+            # self-hosted runner indefinitely.
+            local curlopts=(-sSL --retry 3 --retry-delay 2 --retry-connrefused --max-time 30)
+            manifest=$(curl "${curlopts[@]}" "${auth[@]}" -H "Accept: $accept" \
                        "https://$reg/v2/$repo/manifests/$digest" 2>/dev/null || true)
             [ -z "$manifest" ] && return 0
             # multi-arch index/list -> pick linux/amd64 child
             child=$(printf '%s' "$manifest" | jq -r '
               (.manifests // []) | map(select(.platform.os=="linux" and .platform.architecture=="amd64")) | .[0].digest // empty' 2>/dev/null || true)
             if [ -n "$child" ]; then
-              manifest=$(curl -sSL "${auth[@]}" -H "Accept: $accept" \
+              manifest=$(curl "${curlopts[@]}" "${auth[@]}" -H "Accept: $accept" \
                          "https://$reg/v2/$repo/manifests/$child" 2>/dev/null || true)
             fi
             cfg=$(printf '%s' "$manifest" | jq -r '.config.digest // empty' 2>/dev/null || true)
             [ -z "$cfg" ] && return 0
-            created=$(curl -sSL "${auth[@]}" \
+            created=$(curl "${curlopts[@]}" "${auth[@]}" \
                       "https://$reg/v2/$repo/blobs/$cfg" 2>/dev/null \
                       | jq -r '.created // empty' 2>/dev/null || true)
             printf '%s' "$created"
           }
 
           # --- collect added digest lines from the PR diff -----------
+          # fail-CLOSED: a `git diff` failure (base commit not fetched,
+          # odd ref state, empty SHA) must ABORT, never be swallowed into
+          # an empty diff that reads as "no digests -> pass". The whole
+          # gate is worthless if a git error looks like a clean PR.
+          [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ] || {
+            echo "::error::missing base/head SHA from pull_request payload — cannot compute diff"; exit 1; }
+          DIFF_FILE="$RUNNER_TEMP/pr.diff"
           # Three-dot diff = changes the PR introduces vs the merge-base.
-          ADDED=$(git diff "${BASE_SHA}...${HEAD_SHA}" 2>/dev/null \
-                  | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+          git diff "${BASE_SHA}...${HEAD_SHA}" > "$DIFF_FILE" || {
+            echo "::error::could not compute PR diff ${BASE_SHA}...${HEAD_SHA} — refusing to pass without examining digests"; exit 1; }
+          # grep returns 1 on genuinely-no-matches; that's fine (|| true).
+          ADDED=$(grep -E '^\+' "$DIFF_FILE" | grep -vE '^\+\+\+' || true)
 
           declare -A SEEN_ACTION SEEN_DOCKER
 
-          # GitHub Action pins: uses: owner/repo[/path]@<40-hex>
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            m=$(printf '%s' "$line" | grep -oiE 'uses:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+@[0-9a-f]{40}' | head -1 || true)
+          # GitHub Action pins: uses: owner/repo[/path]@<hex>. Match the
+          # FULL hex run (not a fixed {40}) so an over-long hex is never
+          # silently TRUNCATED to a valid-looking SHA — an oversized pin
+          # flows through to `gh api` and fail-closes on 404 instead.
+          # `grep -o` emits EVERY match per line, so two pins on one line
+          # are both checked (no `head -1` that would let the second ride
+          # through un-aged).
+          while IFS= read -r m; do
             [ -z "$m" ] && continue
-            spec=$(printf '%s' "$m" | sed -E 's/^uses:[[:space:]]*//I')
+            spec=$(printf '%s' "$m" | sed -E 's/^[Uu][Ss][Ee][Ss]:[[:space:]]*//')
             repo=${spec%@*}; sha=${spec#*@}
             key="$repo@$sha"
             [ -n "${SEEN_ACTION[$key]:-}" ] && continue
             SEEN_ACTION[$key]=1
             verdict "$repo@$sha" "action" "$(resolve_action "$repo" "$sha")"
-          done <<< "$ADDED"
+          done < <(printf '%s\n' "$ADDED" \
+                   | grep -oiE 'uses:[[:space:]]*[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+@[0-9a-f]+' || true)
 
-          # Docker digests: <imageref>@sha256:<64-hex>
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            m=$(printf '%s' "$line" | grep -oE '[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}' | head -1 || true)
+          # Docker digests: <imageref>@sha256:<hex>. Same rationale —
+          # greedy hex (no truncation) + every match per line.
+          while IFS= read -r m; do
             [ -z "$m" ] && continue
             ref=${m%@*}; digest=${m#*@}
             key="$ref@$digest"
@@ -271,7 +322,8 @@ jobs:
               continue
             fi
             verdict "$ref@$digest" "docker" "$(resolve_docker "$ref" "$digest")"
-          done <<< "$ADDED"
+          done < <(printf '%s\n' "$ADDED" \
+                   | grep -oE '[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]+' || true)
 
           # --- step summary ------------------------------------------
           {
