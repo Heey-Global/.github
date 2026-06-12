@@ -87,6 +87,11 @@ permissions:
 jobs:
   digest-age:
     name: digest-age
+    # Belt-and-suspenders: with `on: pull_request` this is always true, but
+    # it keeps the job from ever running if someone later adds a privileged
+    # `pull_request_target` trigger to the `on:` block — which the SSRF note
+    # in the header explicitly forbids (attacker-controlled refs must never
+    # touch the base context).
     if: github.event_name == 'pull_request'
     # Same visibility-routing gate as gitleaks.yml / lockfile-lint.yml
     # in this repo (see gitleaks.yml for the long rationale): public
