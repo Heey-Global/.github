@@ -1,8 +1,17 @@
 name: Digest Age Check
 
-# Reusable workflow that enforces a minimum-age cooldown on the
+# Standalone PR workflow that enforces a minimum-age cooldown on the
 # *digests* a PR introduces — Docker image digests (`@sha256:...`) and
 # GitHub Action commit-SHA pins (`uses: owner/repo@<hex>`).
+#
+# It is distributed org-wide as a GitHub *required workflow* (an org
+# branch ruleset rule "Require workflows to pass before merging" that
+# points at THIS file). The ruleset injects + runs it on every PR in the
+# targeted repos with NO per-repo workflow file — that is why it must be
+# a normal `on: pull_request` workflow, NOT a `workflow_call` reusable:
+# ruleset required-workflows are explicitly incompatible with
+# `workflow_call`, and any `branches`/`paths` filters on the event are
+# ignored by the ruleset runner.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -26,17 +35,22 @@ name: Digest Age Check
 # date comes from the immutable artifact itself, so it can't be forged
 # by the PR.
 #
-# CALLER WIRING
-# -------------
-#   jobs:
-#     digest-age:
-#       uses: Heey-Global/.github/.github/workflows/digest-age-check.yml@main
+# ORG RULESET WIRING (admin, one-time)
+# ------------------------------------
+# Org Settings -> Rules -> Rulesets -> New branch ruleset:
+#   - Target repositories: all (or selected), Target branches: default
+#   - Rule: "Require workflows to pass before merging" ->
+#       Heey-Global/.github/.github/workflows/digest-age-check.yml@main
+# The ruleset itself IS the merge requirement, so no per-repo "required
+# status check" needs to be added. This replaces the broken
+# `renovate/stability-days` gate for digest PRs. Version/tag Renovate
+# PRs keep using `renovate/stability-days` (those DO carry a timestamp
+# and work correctly); this check is a no-op for them.
 #
-# Make the resulting `digest-age` check a REQUIRED status check in the
-# caller's branch protection, replacing the broken
-# `renovate/stability-days` requirement for digest PRs. Version/tag
-# Renovate PRs keep using `renovate/stability-days` (those DO carry a
-# timestamp and work correctly); this check is a no-op for them.
+# Per-repo overrides (optional, via repo or org Actions *variables*):
+#   - DIGEST_MIN_AGE_DAYS : cooldown in days (default 3)
+#   - DIGEST_ALLOWLIST    : newline-separated image-ref globs to SKIP;
+#                           when unset, the org-built default below applies.
 #
 # THREAT MODEL / SCOPE
 # --------------------
@@ -60,27 +74,12 @@ name: Digest Age Check
 # response only feeds `jq .created`, so the blast radius is a blind
 # GET — acceptable for this gate's scope).
 
+# `pull_request` (NOT `pull_request_target`): this workflow runs
+# attacker-controlled image refs through outbound curls (see SSRF notes
+# below), so it must run in the PR-merge context with a read-only token
+# and no secret access — never in the privileged base context.
 on:
-  workflow_call:
-    inputs:
-      minimum-age-days:
-        description: "Minimum age (days) a newly-introduced digest must have before the PR can merge."
-        required: false
-        type: number
-        default: 3
-      allowlist:
-        description: >-
-          Newline-separated globs of image refs (as written in-tree,
-          minus the @digest) to SKIP. Matched with shell `case` glob
-          semantics. Use for org-built/trusted images and for images
-          whose registry can't return a usable creation timestamp.
-          The caller's value REPLACES this default — re-list the
-          org-built registries if you override it.
-        required: false
-        type: string
-        default: |
-          ghcr.io/heey-global/*
-          ghcr.io/h-teske/*
+  pull_request:
 
 permissions:
   contents: read
@@ -106,12 +105,23 @@ jobs:
       - name: Check digest ages
         env:
           GH_TOKEN: ${{ github.token }}
-          MIN_AGE_DAYS: ${{ inputs.minimum-age-days }}
-          ALLOWLIST: ${{ inputs.allowlist }}
+          # Org/repo Actions-variable overrides; policy defaults applied
+          # below when unset (a standalone workflow has no `inputs`).
+          MIN_AGE_DAYS: ${{ vars.DIGEST_MIN_AGE_DAYS || '3' }}
+          ALLOWLIST: ${{ vars.DIGEST_ALLOWLIST }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+
+          # Default allowlist (org-built, already-trusted registries) when
+          # no DIGEST_ALLOWLIST variable is set. Mirrors the
+          # `minimumReleaseAge: null` carve-out these same images get in
+          # renovate.json. Setting the variable REPLACES this list — re-add
+          # the org registries if you override it.
+          if [ -z "${ALLOWLIST//[[:space:]]/}" ]; then
+            ALLOWLIST=$(printf '%s\n' 'ghcr.io/heey-global/*' 'ghcr.io/h-teske/*')
+          fi
 
           for tool in jq curl git gh getent awk sort; do
             command -v "$tool" >/dev/null 2>&1 || {
