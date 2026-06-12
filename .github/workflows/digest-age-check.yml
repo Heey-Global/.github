@@ -48,6 +48,17 @@ name: Digest Age Check
 # already trusted) are allowlisted by default so their bumps aren't
 # blocked — mirroring the `minimumReleaseAge: null` carve-out those
 # same images get in renovate.json.
+#
+# SSRF: registry/realm hosts come from the attacker-controlled image
+# ref, so both are resolved + range-checked against private/metadata
+# IPs and curl is pinned (--resolve) to the validated address. Registry
+# redirects are followed (registry.k8s.io 307s to GAR) but restricted to
+# https (--proto-redir =https) to block a redirect onto an http IMDS
+# endpoint; the redirect TARGET still resolves via normal DNS, so a
+# redirect to an https service on a private IP is the documented
+# residual risk (the runner has no secrets on these curls, and the
+# response only feeds `jq .created`, so the blast radius is a blind
+# GET — acceptable for this gate's scope).
 
 on:
   workflow_call:
@@ -180,46 +191,52 @@ jobs:
           }
 
           # --- Docker digest -> config `.created` --------------------
-          # SSRF guard: a malicious PR can point an image at an
-          # attacker-controlled registry whose `www-authenticate` realm
-          # we'd otherwise fetch verbatim, turning the runner into an SSRF
-          # proxy against cloud metadata (169.254.169.254 / 100.100.100.200)
-          # or internal services. String-matching the host is NOT enough —
+          # SSRF guard: a malicious PR controls the image ref, hence BOTH
+          # the registry host AND (indirectly) the `www-authenticate` realm
+          # the runner fetches — either can turn it into an SSRF proxy
+          # against cloud metadata (169.254.169.254 / 100.100.100.200) or
+          # internal services. String-matching the host is NOT enough —
           # it's trivially bypassed by userinfo (`https://ok.com@169.254...`),
           # numeric IP encodings (decimal 2130706433, hex 0x7f000001, octal
           # 0177.0.0.1), and public DNS names that resolve to private IPs
-          # (nip.io). So we RESOLVE the host and range-check the actual IP,
-          # then pin curl to that IP so there's no resolve-time TOCTOU.
-          #
-          # Echoes "host ip" on success; nothing (rc 1) on reject.
-          ip_is_private() {  # dotted-quad -> 0 if private/loopback/link-local/CGNAT/etc
+          # (nip.io). So we RESOLVE the host and range-check the actual IP
+          # for BOTH hops (registry host in resolve_docker, realm in
+          # registry_token), then pin curl to that IP so there's no
+          # resolve-time TOCTOU.
+          ip_is_private() {  # dotted-quad -> 0 if private/loopback/link-local/CGNAT/reserved
             local ip="$1" a b
             a=${ip%%.*}; b=${ip#*.}; b=${b%%.*}
             case "$a" in
               0|10|127) return 0 ;;                       # this-net, RFC1918-10, loopback
               169) [ "$b" = 254 ] && return 0 ;;          # link-local (incl. AWS/GCP/Azure IMDS)
               172) [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 0 ;;  # RFC1918-172
-              192) [ "$b" = 168 ] && return 0 ;;          # RFC1918-192
+              192) { [ "$b" = 168 ] || [ "$b" = 0 ]; } && return 0 ;; # RFC1918-192 + 192.0.0.0/16 special (incl. TEST-NET-1)
+              198) { [ "$b" = 18 ] || [ "$b" = 19 ]; } && return 0 ;; # benchmarking 198.18.0.0/15
               100) [ "$b" -ge 64 ] && [ "$b" -le 127 ] && return 0 ;; # CGNAT (Alibaba IMDS 100.100.100.200)
             esac
+            # multicast 224.0.0.0/4 + reserved/future 240.0.0.0/4
+            # (the latter includes the 255.255.255.255 broadcast).
+            [ "$a" -ge 224 ] && return 0
             return 1
           }
 
-          realm_is_safe() {  # realm-url -> echoes "host ip", rc 0; else rc 1
-            local realm="$1" rest authority host ip
-            case "$realm" in https://*) : ;; *) return 1 ;; esac
-            rest=${realm#https://}
-            authority=${rest%%/*}; authority=${authority%%\?*}
-            # Reject userinfo (defeats `https://trusted@169.254.../` host spoof)
-            case "$authority" in *@*) return 1 ;; esac
-            # Reject IPv6 literals outright — ip_is_private only reasons
-            # about IPv4, and IPv6 ULA/link-local would slip past it.
-            case "$authority" in \[*|*:*:*) return 1 ;; esac
-            host=${authority%%:*}            # strip :port
+          # Shared SSRF core: take a bare authority (host or host:port, NO
+          # scheme/path), resolve it to IPv4, and range-check EVERY answer.
+          # Echoes "host ip" (first resolved IP) on success; nothing + rc1
+          # on reject (userinfo, IPv6 literal, any private/metadata answer,
+          # or unresolvable). Used for BOTH the primary registry host and
+          # the token realm — the registry host is the attacker's most
+          # direct lever (it comes straight from the image ref), so it must
+          # go through the same gate, not just the realm.
+          authority_is_safe() {
+            local authority="$1" host ip ips
+            authority=${authority%%/*}; authority=${authority%%\?*}
+            case "$authority" in *@*) return 1 ;; esac          # reject userinfo
+            case "$authority" in \[*|*:*:*) return 1 ;; esac     # reject IPv6 literal
+            host=${authority%%:*}                                # strip :port
             [ -n "$host" ] || return 1
-            # Resolve to IPv4 and range-check EVERY answer. getent fails
-            # closed (rc != 0 / empty) on NXDOMAIN. awk pulls col-1 IPs.
-            local ips
+            # getent fails closed (rc!=0 / empty) on NXDOMAIN; pipefail
+            # propagates its rc. awk pulls the col-1 address.
             ips=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u) || return 1
             [ -n "$ips" ] || return 1
             while IFS= read -r ip; do
@@ -231,32 +248,43 @@ jobs:
             printf '%s %s' "$host" "$ip"
           }
 
-          registry_token() {  # registry  repo  -> bearer (may be empty)
-            local reg="$1" repo="$2" www realm service token safe rhost rip
-            www=$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
-                  -o /dev/null -D - "https://$reg/v2/" 2>/dev/null \
+          realm_is_safe() {  # https-realm-url -> echoes "host ip", rc0; else rc1
+            local realm="$1"
+            case "$realm" in https://*) : ;; *) return 1 ;; esac
+            authority_is_safe "${realm#https://}"
+          }
+
+          registry_token() {  # reghost regport regip repo -> bearer (may be empty)
+            local reghost="$1" regport="$2" regip="$3" repo="$4" www realm service token safe rhost rip
+            # Pin to the already-range-checked registry IP. --proto-redir
+            # =https blocks a redirect onto an http metadata endpoint.
+            www=$(curl -sS --proto '=https' --proto-redir '=https' \
+                  --resolve "${reghost}:${regport}:${regip}" \
+                  --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
+                  -o /dev/null -D - "https://${reghost}:${regport}/v2/" 2>/dev/null \
                   | tr -d '\r' | grep -i '^www-authenticate:' | head -1 || true)
             [ -z "$www" ] && return 0   # registry needs no auth
             realm=$(printf '%s' "$www"   | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
             service=$(printf '%s' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
             [ -z "$realm" ] && return 0
             safe=$(realm_is_safe "$realm") || {
-              echo "::warning::refusing token realm '$realm' for $reg (non-https, userinfo, IPv6, or private/metadata host)" >&2
+              echo "::warning::refusing token realm '$realm' (non-https, userinfo, IPv6, or private/metadata host)" >&2
               return 0
             }
             rhost=${safe%% *}; rip=${safe#* }
             # Pin curl to the IP we range-checked (--resolve) so a DNS
             # rebind between check and fetch can't swing us onto a private
-            # target. Force https/443 since realm_is_safe required https.
-            token=$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
+            # target. Realms are always https/443.
+            token=$(curl -sS --proto '=https' --proto-redir '=https' \
                     --resolve "${rhost}:443:${rip}" \
+                    --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
                     "${realm}?service=${service}&scope=repository:${repo}:pull" 2>/dev/null \
                     | jq -r '.token // .access_token // empty' 2>/dev/null || true)
             printf '%s' "$token"
           }
 
           resolve_docker() {  # full-image-ref-without-digest  sha256:digest  -> iso date
-            local ref="$1" digest="$2" reg repo first
+            local ref="$1" digest="$2" reg repo first reghost regport regip safe
             # Registry detection follows the Docker reference rule: only
             # the component BEFORE the first '/' can be a registry, and
             # only if it carries a '.'/':' (host/port) or is 'localhost'.
@@ -277,8 +305,23 @@ jobs:
             # may carry a :port, which the split above already isolated)
             repo=$(printf '%s' "$repo" | sed -E 's/:[^/:]+$//')
 
+            # SSRF guard on the PRIMARY registry host. $reg comes straight
+            # from the attacker-controlled image ref, so it — not just the
+            # token realm — is the main outbound-fetch vector: a ref like
+            # `169.254.169.254/x/y@sha256:...` would otherwise curl cloud
+            # metadata directly. Resolve + range-check it and pin every
+            # registry curl to the validated IP. Fail closed (empty date ->
+            # verdict treats as unresolved -> FAIL) if it's private /
+            # metadata / IPv6 / userinfo / unresolvable.
+            safe=$(authority_is_safe "$reg") || {
+              echo "::warning::refusing registry '$reg' for $ref (userinfo, IPv6, or private/metadata host)" >&2
+              return 0
+            }
+            reghost=${safe%% *}; regip=${safe#* }
+            case "$reg" in *:*) regport=${reg##*:} ;; *) regport=443 ;; esac
+
             local token auth=() accept manifest child cfg created
-            token=$(registry_token "$reg" "$repo")
+            token=$(registry_token "$reghost" "$regport" "$regip" "$repo")
             [ -n "$token" ] && auth=(-H "Authorization: Bearer $token")
             accept="application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json"
 
@@ -288,25 +331,34 @@ jobs:
             # drops the Authorization header on cross-host redirects,
             # which is correct (the redirect target issues its own
             # anon/presigned access).
+            # --resolve pins the registry host to the range-checked IP (no
+            # DNS rebind). --proto/--proto-redir =https blocks a malicious
+            # registry from 307-redirecting onto an http cloud-metadata
+            # endpoint (IMDS is http-only). The redirect TARGET still
+            # resolves via normal DNS (k8s.io -> GAR needs that), so this
+            # is defense-in-depth, not a per-hop range-check — see the
+            # THREAT MODEL note in the header.
             # --retry/--max-time match the gitleaks.yml precedent: a
             # transient registry 5xx must not silently become an empty
             # date, and a hung TLS handshake must not park the
             # self-hosted runner indefinitely.
-            local curlopts=(-sSL --retry 3 --retry-delay 2 --retry-connrefused --max-time 30)
+            local curlopts=(-sSL --proto '=https' --proto-redir '=https' \
+              --resolve "${reghost}:${regport}:${regip}" \
+              --retry 3 --retry-delay 2 --retry-connrefused --max-time 30)
             manifest=$(curl "${curlopts[@]}" "${auth[@]}" -H "Accept: $accept" \
-                       "https://$reg/v2/$repo/manifests/$digest" 2>/dev/null || true)
+                       "https://${reghost}:${regport}/v2/$repo/manifests/$digest" 2>/dev/null || true)
             [ -z "$manifest" ] && return 0
             # multi-arch index/list -> pick linux/amd64 child
             child=$(printf '%s' "$manifest" | jq -r '
               (.manifests // []) | map(select(.platform.os=="linux" and .platform.architecture=="amd64")) | .[0].digest // empty' 2>/dev/null || true)
             if [ -n "$child" ]; then
               manifest=$(curl "${curlopts[@]}" "${auth[@]}" -H "Accept: $accept" \
-                         "https://$reg/v2/$repo/manifests/$child" 2>/dev/null || true)
+                         "https://${reghost}:${regport}/v2/$repo/manifests/$child" 2>/dev/null || true)
             fi
             cfg=$(printf '%s' "$manifest" | jq -r '.config.digest // empty' 2>/dev/null || true)
             [ -z "$cfg" ] && return 0
             created=$(curl "${curlopts[@]}" "${auth[@]}" \
-                      "https://$reg/v2/$repo/blobs/$cfg" 2>/dev/null \
+                      "https://${reghost}:${regport}/v2/$repo/blobs/$cfg" 2>/dev/null \
                       | jq -r '.created // empty' 2>/dev/null || true)
             printf '%s' "$created"
           }
