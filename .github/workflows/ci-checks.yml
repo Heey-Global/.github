@@ -39,6 +39,11 @@ permissions:
 jobs:
   ci-checks:
     name: ci-checks
+    # GitHub-hosted on purpose: the sibling checks gate via a self-hosted
+    # visibility ternary because they do real work, but this umbrella is a
+    # trivial always-green echo — running it on a self-hosted runner would
+    # burn fleet capacity for nothing. ubuntu-latest keeps it off the
+    # self-hosted pool.
     runs-on: ubuntu-latest
     steps:
       - name: Umbrella context
