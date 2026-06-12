@@ -1,0 +1,3 @@
+# Pre-push self-review marker — repo-local runtime state written by the
+# /self-review skill, never committed (see CLAUDE.md "Claude-Tooling-Seed").
+.claude/.last-self-review-sha

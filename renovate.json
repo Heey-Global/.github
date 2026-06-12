@@ -1,8 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Heey-Global org-wide Renovate preset. Repos inherit it with `\"extends\": [\"local>Heey-Global/.github\"]` so the shared policy (3-day stability window, vulnerability fast-track, h-teske assignment) lives in ONE place instead of being copy-pasted (and drifting) across every repo. This file is ALSO the config Renovate uses to manage the .github repo itself.",
+    "Digest cooldown coupling: the 3-day `minimumReleaseAge` below only protects updates that carry a datasource release timestamp (versions/tags). Digest updates (@sha256 / pinned action SHAs) carry NO timestamp, so Renovate parks them on `renovate/stability-days` forever. A repo that wants the cooldown on digests too must (a) exempt digests from `minimumReleaseAge` locally AND (b) wire the reusable `.github/workflows/digest-age-check.yml` as a required check, which re-imposes the cooldown using authoritative registry/commit dates. See Heey-Global/k8s for the reference wiring. This preset intentionally does NOT exempt digests, so extending it alone never silently drops a cooldown."
+  ],
   "extends": [
     "config:recommended"
   ],
+  "assignees": ["h-teske"],
   "minimumReleaseAge": "3 days",
   "vulnerabilityAlerts": {
     "minimumReleaseAge": "0 days"
