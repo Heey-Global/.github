@@ -222,19 +222,28 @@ jobs:
 
           # Shared SSRF core: take a bare authority (host or host:port, NO
           # scheme/path), resolve it to IPv4, and range-check EVERY answer.
-          # Echoes "host ip" (first resolved IP) on success; nothing + rc1
-          # on reject (userinfo, IPv6 literal, any private/metadata answer,
-          # or unresolvable). Used for BOTH the primary registry host and
-          # the token realm — the registry host is the attacker's most
-          # direct lever (it comes straight from the image ref), so it must
-          # go through the same gate, not just the realm.
+          # Echoes "host port ip" (port defaults to 443; first resolved IP)
+          # on success; nothing + rc1 on reject (userinfo, IPv6 literal,
+          # non-numeric port, any private/metadata answer, or unresolvable).
+          # Used for BOTH the primary registry host and the token realm —
+          # the registry host is the attacker's most direct lever (it comes
+          # straight from the image ref), so it must go through the same
+          # gate, not just the realm. The port is echoed so the caller can
+          # pin curl's --resolve to the SAME host:port the URL uses: curl
+          # silently ignores a --resolve whose port mismatches the URL, so a
+          # hardcoded :443: would let a non-443 realm/registry skip the pin
+          # and re-open the DNS-rebind window.
           authority_is_safe() {
-            local authority="$1" host ip ips
+            local authority="$1" host port ip ips
             authority=${authority%%/*}; authority=${authority%%\?*}
             case "$authority" in *@*) return 1 ;; esac          # reject userinfo
             case "$authority" in \[*|*:*:*) return 1 ;; esac     # reject IPv6 literal
-            host=${authority%%:*}                                # strip :port
+            case "$authority" in
+              *:*) host=${authority%:*}; port=${authority##*:} ;;
+              *)   host=$authority; port=443 ;;
+            esac
             [ -n "$host" ] || return 1
+            case "$port" in ''|*[!0-9]*) return 1 ;; esac        # port must be numeric
             # getent fails closed (rc!=0 / empty) on NXDOMAIN; pipefail
             # propagates its rc. awk pulls the col-1 address.
             ips=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u) || return 1
@@ -245,17 +254,17 @@ jobs:
               ip_is_private "$ip" && return 1                   # any private answer -> reject
             done <<< "$ips"
             ip=$(printf '%s\n' "$ips" | head -1)
-            printf '%s %s' "$host" "$ip"
+            printf '%s %s %s' "$host" "$port" "$ip"
           }
 
-          realm_is_safe() {  # https-realm-url -> echoes "host ip", rc0; else rc1
+          realm_is_safe() {  # https-realm-url -> echoes "host port ip", rc0; else rc1
             local realm="$1"
             case "$realm" in https://*) : ;; *) return 1 ;; esac
             authority_is_safe "${realm#https://}"
           }
 
           registry_token() {  # reghost regport regip repo -> bearer (may be empty)
-            local reghost="$1" regport="$2" regip="$3" repo="$4" www realm service token safe rhost rip
+            local reghost="$1" regport="$2" regip="$3" repo="$4" www realm service token safe rhost rport rip
             # Pin to the already-range-checked registry IP. --proto-redir
             # =https blocks a redirect onto an http metadata endpoint.
             www=$(curl -sS --proto '=https' --proto-redir '=https' \
@@ -268,15 +277,16 @@ jobs:
             service=$(printf '%s' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
             [ -z "$realm" ] && return 0
             safe=$(realm_is_safe "$realm") || {
-              echo "::warning::refusing token realm '$realm' (non-https, userinfo, IPv6, or private/metadata host)" >&2
+              echo "::warning::refusing token realm '$realm' (non-https, userinfo, IPv6, non-numeric port, or private/metadata host)" >&2
               return 0
             }
-            rhost=${safe%% *}; rip=${safe#* }
+            read -r rhost rport rip <<< "$safe"
             # Pin curl to the IP we range-checked (--resolve) so a DNS
             # rebind between check and fetch can't swing us onto a private
-            # target. Realms are always https/443.
+            # target. Pin the realm's ACTUAL port (parsed by realm_is_safe),
+            # not a hardcoded 443 — curl ignores a port-mismatched --resolve.
             token=$(curl -sS --proto '=https' --proto-redir '=https' \
-                    --resolve "${rhost}:443:${rip}" \
+                    --resolve "${rhost}:${rport}:${rip}" \
                     --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
                     "${realm}?service=${service}&scope=repository:${repo}:pull" 2>/dev/null \
                     | jq -r '.token // .access_token // empty' 2>/dev/null || true)
@@ -317,8 +327,7 @@ jobs:
               echo "::warning::refusing registry '$reg' for $ref (userinfo, IPv6, or private/metadata host)" >&2
               return 0
             }
-            reghost=${safe%% *}; regip=${safe#* }
-            case "$reg" in *:*) regport=${reg##*:} ;; *) regport=443 ;; esac
+            read -r reghost regport regip <<< "$safe"
 
             local token auth=() accept manifest child cfg created
             token=$(registry_token "$reghost" "$regport" "$regip" "$repo")
