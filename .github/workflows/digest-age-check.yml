@@ -2,7 +2,7 @@ name: Digest Age Check
 
 # Reusable workflow that enforces a minimum-age cooldown on the
 # *digests* a PR introduces — Docker image digests (`@sha256:...`) and
-# GitHub Action commit-SHA pins (`uses: owner/repo@<40-hex>`).
+# GitHub Action commit-SHA pins (`uses: owner/repo@<hex>`).
 #
 # WHY THIS EXISTS
 # ---------------
@@ -102,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for tool in jq curl git gh; do
+          for tool in jq curl git gh getent awk sort; do
             command -v "$tool" >/dev/null 2>&1 || {
               echo "::error::required tool '$tool' not found on runner"; exit 1; }
           done
@@ -182,25 +182,57 @@ jobs:
           # --- Docker digest -> config `.created` --------------------
           # SSRF guard: a malicious PR can point an image at an
           # attacker-controlled registry whose `www-authenticate` realm
-          # we'd otherwise fetch verbatim. Only follow an https realm on
-          # a public host — reject link-local / loopback / private / cloud
-          # metadata targets so the runner can't be turned into an SSRF
-          # proxy. (The registry curls carry no GITHUB_TOKEN, so the blast
-          # radius is limited, but a blind outbound to a chosen URL is
-          # still worth refusing.)
-          realm_is_safe() {
-            local realm="$1" host
-            case "$realm" in https://*) : ;; *) return 1 ;; esac
-            host=$(printf '%s' "$realm" | sed -E 's#^https://([^/:]+).*#\1#')
-            case "$host" in
-              localhost|127.*|0.*|10.*|192.168.*|169.254.*|metadata|metadata.*|*.internal|*.local|[0-9]*:*|\[*) return 1 ;;
-              172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 1 ;;
+          # we'd otherwise fetch verbatim, turning the runner into an SSRF
+          # proxy against cloud metadata (169.254.169.254 / 100.100.100.200)
+          # or internal services. String-matching the host is NOT enough —
+          # it's trivially bypassed by userinfo (`https://ok.com@169.254...`),
+          # numeric IP encodings (decimal 2130706433, hex 0x7f000001, octal
+          # 0177.0.0.1), and public DNS names that resolve to private IPs
+          # (nip.io). So we RESOLVE the host and range-check the actual IP,
+          # then pin curl to that IP so there's no resolve-time TOCTOU.
+          #
+          # Echoes "host ip" on success; nothing (rc 1) on reject.
+          ip_is_private() {  # dotted-quad -> 0 if private/loopback/link-local/CGNAT/etc
+            local ip="$1" a b
+            a=${ip%%.*}; b=${ip#*.}; b=${b%%.*}
+            case "$a" in
+              0|10|127) return 0 ;;                       # this-net, RFC1918-10, loopback
+              169) [ "$b" = 254 ] && return 0 ;;          # link-local (incl. AWS/GCP/Azure IMDS)
+              172) [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 0 ;;  # RFC1918-172
+              192) [ "$b" = 168 ] && return 0 ;;          # RFC1918-192
+              100) [ "$b" -ge 64 ] && [ "$b" -le 127 ] && return 0 ;; # CGNAT (Alibaba IMDS 100.100.100.200)
             esac
-            return 0
+            return 1
+          }
+
+          realm_is_safe() {  # realm-url -> echoes "host ip", rc 0; else rc 1
+            local realm="$1" rest authority host ip
+            case "$realm" in https://*) : ;; *) return 1 ;; esac
+            rest=${realm#https://}
+            authority=${rest%%/*}; authority=${authority%%\?*}
+            # Reject userinfo (defeats `https://trusted@169.254.../` host spoof)
+            case "$authority" in *@*) return 1 ;; esac
+            # Reject IPv6 literals outright — ip_is_private only reasons
+            # about IPv4, and IPv6 ULA/link-local would slip past it.
+            case "$authority" in \[*|*:*:*) return 1 ;; esac
+            host=${authority%%:*}            # strip :port
+            [ -n "$host" ] || return 1
+            # Resolve to IPv4 and range-check EVERY answer. getent fails
+            # closed (rc != 0 / empty) on NXDOMAIN. awk pulls col-1 IPs.
+            local ips
+            ips=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u) || return 1
+            [ -n "$ips" ] || return 1
+            while IFS= read -r ip; do
+              [ -n "$ip" ] || continue
+              case "$ip" in *.*.*.*) : ;; *) return 1 ;; esac   # not a dotted-quad
+              ip_is_private "$ip" && return 1                   # any private answer -> reject
+            done <<< "$ips"
+            ip=$(printf '%s\n' "$ips" | head -1)
+            printf '%s %s' "$host" "$ip"
           }
 
           registry_token() {  # registry  repo  -> bearer (may be empty)
-            local reg="$1" repo="$2" www realm service token
+            local reg="$1" repo="$2" www realm service token safe rhost rip
             www=$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
                   -o /dev/null -D - "https://$reg/v2/" 2>/dev/null \
                   | tr -d '\r' | grep -i '^www-authenticate:' | head -1 || true)
@@ -208,11 +240,16 @@ jobs:
             realm=$(printf '%s' "$www"   | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
             service=$(printf '%s' "$www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
             [ -z "$realm" ] && return 0
-            realm_is_safe "$realm" || {
-              echo "::warning::refusing token realm '$realm' for $reg (non-https or private/metadata host)" >&2
+            safe=$(realm_is_safe "$realm") || {
+              echo "::warning::refusing token realm '$realm' for $reg (non-https, userinfo, IPv6, or private/metadata host)" >&2
               return 0
             }
+            rhost=${safe%% *}; rip=${safe#* }
+            # Pin curl to the IP we range-checked (--resolve) so a DNS
+            # rebind between check and fetch can't swing us onto a private
+            # target. Force https/443 since realm_is_safe required https.
             token=$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --max-time 30 \
+                    --resolve "${rhost}:443:${rip}" \
                     "${realm}?service=${service}&scope=repository:${repo}:pull" 2>/dev/null \
                     | jq -r '.token // .access_token // empty' 2>/dev/null || true)
             printf '%s' "$token"
