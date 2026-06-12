@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Heey-Global org-wide Renovate preset. Repos inherit it with `\"extends\": [\"local>Heey-Global/.github\"]` so the shared policy (3-day stability window, vulnerability fast-track, h-teske assignment) lives in ONE place instead of being copy-pasted (and drifting) across every repo. Canonical preset filename is `default.json`: `local>Heey-Global/.github` resolves the repo's `default.json`. (Renovate's older fallback to a `renovate.json` preset is deprecated and emits a repository-problem warning on every extending repo, which is why the baseline lives here.) The .github repo manages its OWN dependencies via a thin `renovate.json` that extends this same preset.",
+    "Digest cooldown coupling: the 3-day `minimumReleaseAge` below only protects updates that carry a datasource release timestamp (versions/tags). Digest updates (@sha256 image digests / pinned action SHAs) carry NO timestamp, so without an exemption Renovate parks them on `renovate/stability-days` forever. The `packageRules` below exempt digest/pinDigest from `minimumReleaseAge` so they leave that limbo. This is SAFE because the cooldown is re-imposed org-wide by the `digest-age` required workflow (Heey-Global/.github/.github/workflows/digest-age-check.yml, distributed via an org branch ruleset rule 'Require workflows to pass before merging'), which re-derives the same 3-day soak from each digest's authoritative upstream creation date — the date Renovate refuses to trust by design. The two are coupled: if that org ruleset were ever removed, this exemption would let un-soaked digests merge, so the gate must stay active wherever this preset is extended."
+  ],
+  "extends": [
+    "config:recommended"
+  ],
+  "assignees": ["h-teske"],
+  "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days"
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Extract pinned npm package versions from `npm install -g pkg@version` lines inside reusable workflows. Renovate's stock github-actions manager only catches `uses:` action pins; inline package installs need this customManager to be visible. Annotation must sit directly above the install line — see `lockfile-lint.yml` for the canonical shape.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*npm\\s+install(?:\\s+-g)?\\s+\\S+@(?<currentValue>[^\\s'\"]+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Exempt digest updates (@sha256 image digests + action commit-SHA pins) from the 3-day minimumReleaseAge. Digests carry no datasource release timestamp, so the cooldown would otherwise park every digest-update PR on `renovate/stability-days: pending` forever — the PR never becomes mergeable even when the underlying image/commit is months old. The cooldown is re-imposed org-wide by the `digest-age` required workflow (an org branch ruleset rule pointing at Heey-Global/.github/.github/workflows/digest-age-check.yml), which re-derives the same 3-day soak from each digest's authoritative upstream creation date. KEEP COUPLED: removing this exemption while the org digest-age ruleset is inactive would let un-soaked digests merge.",
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest"
+      ],
+      "minimumReleaseAge": null
+    }
+  ]
+}
