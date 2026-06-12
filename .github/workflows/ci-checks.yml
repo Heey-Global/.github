@@ -1,0 +1,50 @@
+name: CI Checks
+
+# Emits the generic `ci-checks` status context for branch protection.
+#
+# WHY THIS REPO NEEDS IT
+# ----------------------
+# The org-wide branch-protection rule requires a status check named
+# `ci-checks` on every repo's default branch. Repos whose CI jobs live
+# in a SINGLE workflow file emit `ci-checks` as a `needs:`-aggregator
+# job that goes red if any required job failed (see
+# Heey-Global/dev-server .github/workflows/ci.yml). This repo's checks
+# (digest-age, gitleaks, lockfile-lint) live in SEPARATE workflow
+# files, and a `needs:` cannot span workflow files — so here `ci-checks`
+# is a standalone always-green job that satisfies the generic required
+# context.
+#
+# IMPORTANT — this job does NOT re-assert the sibling checks. The real
+# gating for this repo must come from `digest-age`, `gitleaks` and
+# `lockfile-lint` each being marked REQUIRED in branch protection
+# alongside `ci-checks`. If only `ci-checks` were required, a failing
+# gitleaks/digest-age run would NOT block the merge.
+#
+# Runs on every PR to main (no path filter) so the required context is
+# always produced — a required check skipped by a path filter reports
+# nothing and parks the PR pending forever.
+
+on:
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs so rapid force-pushes don't stack runs.
+concurrency:
+  group: ci-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci-checks:
+    name: ci-checks
+    # GitHub-hosted on purpose: the sibling checks gate via a self-hosted
+    # visibility ternary because they do real work, but this umbrella is a
+    # trivial always-green echo — running it on a self-hosted runner would
+    # burn fleet capacity for nothing. ubuntu-latest keeps it off the
+    # self-hosted pool.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Umbrella context
+        run: echo "ci-checks umbrella — individual required checks (digest-age, gitleaks, lockfile-lint) gate this repo."
