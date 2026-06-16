@@ -92,10 +92,12 @@ jobs:
           else
             # Fleet-standard external-fetch resilience: `--retry 3
             # --retry-delay 5 --retry-connrefused` (matches the
-            # Install Gitleaks step below). `--max-time 30` bounds
-            # total wallclock — toml is few KB so 30s is comfortably
-            # above the legitimate download time, and the bound stops
-            # a stuck TLS handshake from parking the runner.
+            # Install Gitleaks step below). `--max-time 30` is the
+            # PER-ATTEMPT bound (not total wallclock) — worst case
+            # is `3 retries × 30s + 2 × 5s delay ≈ 100s`. Sized
+            # comfortably above the legitimate download time for a
+            # few-KB toml, while still stopping a stuck TLS handshake
+            # from parking the runner.
             curl -sSfL --retry 3 --retry-delay 5 --retry-connrefused --max-time 30 \
               -o "$RUNNER_TEMP/gitleaks.toml" \
               "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
@@ -136,8 +138,12 @@ jobs:
           # check on the first hiccup. Observed flake: deep-ocr-api
           # PR #255 (Refs #157) — single curl attempt against
           # objects.githubusercontent.com timed out, blocking an
-          # unrelated PR's check. `--max-time` bounds total wallclock
-          # at 60s so a stuck handshake doesn't park the runner.
+          # unrelated PR's check. `--max-time 60` is the PER-ATTEMPT
+          # bound (not total wallclock) — worst case is
+          # `3 retries × 60s + 2 × 5s delay ≈ 190s`. Tarball is ~10 MB
+          # so 60s/attempt is comfortably above the legitimate download
+          # time, while still stopping a stuck handshake from parking
+          # the runner.
           curl -sSfL --retry 3 --retry-delay 5 --retry-connrefused --max-time 60 \
             -o "$tmpdir/$TARBALL" \
             "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/${TARBALL}"
