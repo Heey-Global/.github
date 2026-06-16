@@ -90,10 +90,13 @@ jobs:
             echo "Using in-tree .gitleaks.toml (trusted source on Heey-Global/.github)"
             cp .gitleaks.toml "$RUNNER_TEMP/gitleaks.toml"
           else
-            # `--max-time` is the hung-handshake guard — without it a
-            # stuck TLS connection from raw.githubusercontent.com would
-            # park the self-hosted runner indefinitely.
-            curl -sSfL --retry 3 --retry-delay 2 --max-time 30 \
+            # Fleet-standard external-fetch resilience: `--retry 3
+            # --retry-delay 5 --retry-connrefused` (matches the
+            # Install Gitleaks step below). `--max-time 30` bounds
+            # total wallclock — toml is few KB so 30s is comfortably
+            # above the legitimate download time, and the bound stops
+            # a stuck TLS handshake from parking the runner.
+            curl -sSfL --retry 3 --retry-delay 5 --retry-connrefused --max-time 30 \
               -o "$RUNNER_TEMP/gitleaks.toml" \
               "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
           fi
@@ -114,10 +117,15 @@ jobs:
           GITLEAKS_VERSION="v8.30.1"
           # EXPECTED_SHA256 must be bumped together with GITLEAKS_VERSION
           # above — Renovate's `github-releases` datasource only updates
-          # the version line, not the checksum. Source of truth for the
-          # value is the upstream `gitleaks_<ver>_checksums.txt` (line
-          # for `linux_x64.tar.gz`):
-          # https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_checksums.txt
+          # the version line, not the checksum. Source of truth is the
+          # `linux_x64.tar.gz` line of the release's checksums.txt;
+          # current (v8.30.1):
+          # https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
+          # (substitute the new version after a Renovate bump). Do NOT
+          # add a `# renovate:` annotation above this line — Renovate
+          # has no datasource for raw hashes; the customManager regex
+          # in default.json would match it as `currentValue=<hash>` and
+          # confuse the bump.
           EXPECTED_SHA256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
           TARBALL="gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
           tmpdir="$(mktemp -d)"
