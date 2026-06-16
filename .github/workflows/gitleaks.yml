@@ -93,11 +93,15 @@ jobs:
             # Fleet-standard external-fetch resilience: `--retry 3
             # --retry-delay 5 --retry-connrefused` (matches the
             # Install Gitleaks step below). `--max-time 30` is the
-            # PER-ATTEMPT bound (not total wallclock) — worst case
-            # is `3 retries × 30s + 2 × 5s delay ≈ 100s`. Sized
-            # comfortably above the legitimate download time for a
-            # few-KB toml, while still stopping a stuck TLS handshake
-            # from parking the runner.
+            # PER-ATTEMPT bound (not total wallclock) — `--retry 3`
+            # means 1 initial + 3 retries = 4 attempts, with 3
+            # inter-attempt delays, so the floor on worst-case
+            # wallclock is `4 × 30s + 3 × 5s = 135s` (curl honours
+            # `Retry-After` when the server sends it, so the true
+            # cap can be larger). Sized comfortably above the
+            # legitimate download time for a few-KB toml, while
+            # still stopping a stuck TLS handshake from parking
+            # the runner.
             curl -sSfL --retry 3 --retry-delay 5 --retry-connrefused --max-time 30 \
               -o "$RUNNER_TEMP/gitleaks.toml" \
               "https://raw.githubusercontent.com/Heey-Global/.github/main/.gitleaks.toml"
@@ -121,13 +125,13 @@ jobs:
           # above — Renovate's `github-releases` datasource only updates
           # the version line, not the checksum. Source of truth is the
           # `linux_x64.tar.gz` line of the release's checksums.txt;
-          # current (v8.30.1):
-          # https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
-          # (substitute the new version after a Renovate bump). Do NOT
-          # add a `# renovate:` annotation above this line — Renovate
-          # has no datasource for raw hashes; the customManager regex
-          # in default.json would match it as `currentValue=<hash>` and
-          # confuse the bump.
+          # for v<VERSION>:
+          # https://github.com/gitleaks/gitleaks/releases/download/v<VERSION>/gitleaks_<VERSION>_checksums.txt
+          # (substitute the new tag after a Renovate bump; current pin
+          # is v8.30.1). Do NOT add a `# renovate:` annotation above
+          # this line — Renovate has no datasource for raw hashes; the
+          # customManager regex in default.json would match it as
+          # `currentValue=<hash>` and confuse the bump.
           EXPECTED_SHA256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
           TARBALL="gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
           tmpdir="$(mktemp -d)"
@@ -139,11 +143,14 @@ jobs:
           # PR #255 (Refs #157) — single curl attempt against
           # objects.githubusercontent.com timed out, blocking an
           # unrelated PR's check. `--max-time 60` is the PER-ATTEMPT
-          # bound (not total wallclock) — worst case is
-          # `3 retries × 60s + 2 × 5s delay ≈ 190s`. Tarball is ~10 MB
-          # so 60s/attempt is comfortably above the legitimate download
-          # time, while still stopping a stuck handshake from parking
-          # the runner.
+          # bound (not total wallclock) — `--retry 3` means 1 initial +
+          # 3 retries = 4 attempts, with 3 inter-attempt delays, so the
+          # floor on worst-case wallclock is `4 × 60s + 3 × 5s = 255s`
+          # (curl honours `Retry-After` when the server sends it, so
+          # the true cap can be larger). Tarball is ~10 MB so 60s/
+          # attempt is comfortably above the legitimate download time,
+          # while still stopping a stuck handshake from parking the
+          # runner.
           curl -sSfL --retry 3 --retry-delay 5 --retry-connrefused --max-time 60 \
             -o "$tmpdir/$TARBALL" \
             "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/${TARBALL}"
