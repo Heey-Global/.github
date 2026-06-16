@@ -22,6 +22,16 @@
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*npm\\s+install(?:\\s+-g)?\\s+\\S+@(?<currentValue>[^\\s'\"]+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Extract pinned tool versions from shell-variable assignments (`VAR=\"v1.2.3\"`) inside reusable workflows — covers the common pattern where an install step pulls a release tarball whose version is held in an env-style shell var (gitleaks.yml's GITLEAKS_VERSION, similar for any future curl-installed tool). Annotation must sit on the line directly preceding the assignment; nothing in between. Renovate updates only the value, not a co-located SHA256 — workflows where a checksum is verified alongside the version must document the companion-bump requirement at the call site.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[A-Z_][A-Z0-9_]*=\"?(?<currentValue>[^\"\\s]+)\"?"
+      ]
     }
   ],
   "packageRules": [
