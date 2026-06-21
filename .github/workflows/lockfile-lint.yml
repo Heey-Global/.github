@@ -37,7 +37,7 @@ jobs:
     # self-hosted array under caller-repo invocation.
     runs-on: ${{ github.repository == 'Heey-Global/.github' && 'ubuntu-latest' || fromJSON('["self-hosted", "dev-server", "X64"]') }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Node.js
         # Self-hosted `dev-server` runners (the meaningful caller path)
         # don't have `node`/`npm` on `$PATH` by default — only the
