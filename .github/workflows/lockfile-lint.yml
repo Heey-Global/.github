@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           # renovate: datasource=npm depName=lockfile-lint
-          npm install -g lockfile-lint@5.0.0
+          npm install -g lockfile-lint@5.0.1
       - name: Lint package-lock.json
         run: |
           set -euo pipefail
